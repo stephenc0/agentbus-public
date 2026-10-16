@@ -52,8 +52,8 @@ test('overlay addresses, static peer validation and join tokens', () => {
 
 test('lan init binds overlay addresses, rejects public ones, and needs a fixed port for static peers', (t) => {
   const root = tmp(t), peer = { hostId: crypto.randomUUID(), address: '100.80.1.2', port: 47800 };
-  assert.throws(() => initLan({ busDir: path.join(root, 'x'), bind: '8.8.8.8' }), /bind must be/);
-  assert.throws(() => initLan({ busDir: path.join(root, 'y'), bind: '100.70.0.2', peers: [peer] }), /fixed --port/);
+  assert.throws(() => initLan({ busDir: path.join(root, 'x'), name: 'remote', bind: '8.8.8.8' }), /bind must be/);
+  assert.throws(() => initLan({ busDir: path.join(root, 'y'), name: 'remote', bind: '100.70.0.2', peers: [peer] }), /fixed --port/);
   initLan({ busDir: path.join(root, 'z'), name: 'remote', bind: '100.70.0.2', port: 47800, peers: [peer], mdns: false });
   const config = loadLan(path.join(root, 'z'));
   assert.equal(config.bind, '100.70.0.2'); assert.equal(config.mdns, false); assert.deepEqual(config.peers, [peer]);
@@ -173,6 +173,8 @@ test('leak check blocks phone numbers, emails and local secrets but not addresse
   assert.deepEqual(leakCheck('peers: win (100.101.102.103:47800), port 47800, node 24+', { secrets }), []);
   for (const bad of ['+1 (555) 555-0142', '555.555.0142', 'call 5555550142', 'x@example.com']) assert.notDeepEqual(leakCheck(bad, { secrets }), [], bad);
   assert.deepEqual(leakCheck('token abc+1 (555) 555-0142xyz', { secrets: [], allow: ['abc+1 (555) 555-0142xyz'] }), []);
+  // host ids with long digit runs are not phone numbers
+  assert.deepEqual(leakCheck('[{"hostId":"21366412-3812-4366-8123-456789012345"}] 12345678-1234-4123-8123-123456789012', { secrets }), []);
 });
 
 test('invite carries a working token and refuses identifying content; join writes an overlay-only config', async (t) => {
