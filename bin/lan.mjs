@@ -24,10 +24,10 @@ export async function runLan(args) {
     console.log(JSON.stringify({ ...result, keyFile: undefined, next: 'agentbus lan install, then agentbus lan doctor' }, null, 2));
   } else if (command === 'invite') {
     const { buildInvite } = await import('../lib/wan.mjs');
-    const peerSpecs = many('--peer'), name = option('--name'), repo = option('--repo'), port = option('--port'), tokenOnly = has('--token-only');
-    if (!repo && !tokenOnly) throw Error('usage: agentbus lan invite --repo URL --peer NAME=100.x.y.z[:PORT] [--peer ...] [--name joiner-name] [--port joiner-port] [--token-only]');
+    const peerSpecs = many('--peer'), name = option('--name'), repo = option('--repo'), port = option('--port'), tokenOnly = has('--token-only'), tailscaleAuthKey = option('--tailscale-authkey') ?? (process.env.TS_AUTHKEY || undefined);
+    if (!repo && !tokenOnly) throw Error('usage: agentbus lan invite --repo URL --peer NAME=100.x.y.z[:PORT] [--peer ...] [--name joiner-name] [--port joiner-port] [--tailscale-authkey tskey-auth-... | env TS_AUTHKEY] [--token-only]');
     if (args.length) throw Error(`unknown arguments: ${args.join(' ')}`);
-    const invite = await buildInvite({ peerSpecs, name, repo: repo || '<repo>', ...(port ? { port: Number(port) } : {}) });
+    const invite = await buildInvite({ peerSpecs, name, repo: repo || '<repo>', tailscaleAuthKey, ...(port ? { port: Number(port) } : {}) });
     console.log(tokenOnly ? invite.token : invite.text);
   } else if (command === 'peer') {
     const sub = args.shift();

@@ -188,6 +188,11 @@ test('invite carries a working token and refuses identifying content; join write
   const ownerConfig = loadLan(owner);
   assert.deepEqual(decodeJoinToken(token), { key: ownerConfig.key.toString('hex'), peers: [{ hostId: ownerConfig.hostId, name: 'winbox', address: '100.90.0.4', port: 47800 }] });
   await assert.rejects(buildInvite({ busDir: owner, peerSpecs: ['self=100.90.0.4'], repo: 'https://example.com/call-555-555-0142' }), /refusing to print the invite/);
+  const withKey = await buildInvite({ busDir: owner, peerSpecs: ['self=100.90.0.4'], name: 'friend', repo: 'https://github.com/example/agentbus', tailscaleAuthKey: 'tskey-auth-k1234567CNTRL-0123456789abcdef' });
+  assert.match(withKey.text, /tailscale auth key \(secret, single use\): tskey-auth-k1234567CNTRL-0123456789abcdef/);
+  assert.match(withKey.text, /tailscale up --auth-key='<the tailscale auth key above>'/);
+  assert.match(withKey.text, /brew install --cask tailscale-app/);
+  await assert.rejects(buildInvite({ busDir: owner, peerSpecs: ['self=100.90.0.4'], repo: 'r', tailscaleAuthKey: 'not-a-key' }), /tskey-auth/);
   const remote = path.join(root, 'remote');
   const joined = await join({ busDir: remote, token, name: 'friend', bind: '100.70.0.9' });
   const rc = loadLan(remote);

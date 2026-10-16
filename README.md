@@ -264,7 +264,9 @@ owner side, once (the host with shared task storage, e.g. the windows box):
    ```sh
    agentbus lan invite --repo https://github.com/OWNER/agentbus --peer self=100.x.y.z --name their-machine
    ```
-   `--peer NAME=ADDRESS[:PORT]` can repeat for other group hosts they can reach. the command refuses
+   `--peer NAME=ADDRESS[:PORT]` can repeat for other group hosts they can reach. add
+   `--tailscale-authkey tskey-auth-...` (single use, pre-approved, not ephemeral, short expiry; or env `TS_AUTHKEY`)
+   and the message also joins their machine to your tailnet: no tailscale account, invite or share needed on their side. the command refuses
    to print anything containing a phone number, email address or local secret.
 
 the joiner pastes that message into claude code, which runs `lan join`, `lan install`, registers the
