@@ -250,3 +250,17 @@ test('a learned peer that comes back on a new port is followed', async (t) => {
   assert.equal(A.peers.get(cb.hostId).port, 40002);
   assert.equal(A.peers.get(cb.hostId).learned, true);
 });
+
+test('a stale mdns entry (host left the lan without a goodbye) yields to the static route', async (t) => {
+  const { B, ca, peerA } = await wanPair(t, { storage: false });
+  await B.refresh();
+  assert.equal(B.peers.get(ca.hostId).static, true);
+  // the host was last seen on the lan via mdns at an address that no longer answers
+  B.discover({ txt: { v: '1', id: ca.hostId }, name: 'lan-a', port: 1, addresses: ['127.0.0.1'], referer: { address: '127.0.0.1' } });
+  assert.ok(!B.peers.get(ca.hostId).static, 'mdns entry took over');
+  await B.refresh();
+  assert.ok(B.peers.get(ca.hostId).error, 'stale lan entry fails');
+  await B.refresh();
+  const p = B.peers.get(ca.hostId);
+  assert.equal(p.static, true); assert.equal(p.port, peerA.port); assert.ok(!p.error && p.agents.length === 1, 'static route restored without waiting for mdns expiry');
+});
