@@ -60,7 +60,7 @@ switch (cmd) {
   }
   case "launch-codex": {
     const { launchDesktop } = await import("../lib/codex-launch.mjs");
-    console.log(JSON.stringify(await launchDesktop(), null, 2));
+    console.log(JSON.stringify(await launchDesktop({ atLogin: has("--at-login") }), null, 2));
     break;
   }
   case "list": case "ls": case undefined: {
