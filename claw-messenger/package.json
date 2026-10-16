@@ -1,0 +1,8 @@
+{
+  "name": "claw-messenger-codex",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"test": "node --test test/*.test.mjs", "start": "node daemon.mjs", "mcp": "node mcp.mjs"},
+  "dependencies": {"@emotion-machine/claw-messenger": "0.1.18", "@modelcontextprotocol/sdk": "^1.31.0", "zod": "^3.25.76"}
+}

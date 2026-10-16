@@ -1,0 +1,22 @@
+{
+  "name": "agentbus",
+  "version": "0.6.0",
+  "description": "discovery, messaging and job file transfer between local, LAN and tailscale-connected claude/codex sessions",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs claw-messenger/test/*.test.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "bonjour-service": "^1.4.4",
+    "zod": "^3.25.76"
+  },
+  "private": true,
+  "bin": {
+    "agentbus": "bin/agentbus.mjs"
+  }
+}

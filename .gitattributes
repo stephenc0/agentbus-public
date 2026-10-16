@@ -1,0 +1,2 @@
+# identical source bytes keep deployment fingerprints comparable across hosts.
+* text=auto eol=lf
