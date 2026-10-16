@@ -220,3 +220,33 @@ test('1 GiB streams through the blob lane with flat memory', { skip: !process.en
   t.diagnostic(`1 GiB up+down in ${((Date.now() - t0) / 1000).toFixed(1)}s, peak rss delta ${deltaMiB.toFixed(0)} MiB`);
   assert.ok(deltaMiB < 256, `rss grew ${deltaMiB} MiB`);
 });
+
+test('an existing group member joining remotely keeps key, host id and mdns; fixes port 0 and a vanished bind', async (t) => {
+  const root = tmp(t), owner = path.join(root, 'owner'), member = path.join(root, 'member');
+  initLan({ busDir: owner, name: 'winbox', port: 47800 });
+  const ownerConfig = loadLan(owner);
+  initLan({ busDir: member, name: 'laptop', keyFile: path.join(owner, 'lan', 'key') }); // joined at the owner's place: port 0, default bind
+  const cfgFile = path.join(member, 'lan', 'config.json');
+  const before = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+  fs.writeFileSync(cfgFile, JSON.stringify({ ...before, bind: '192.168.77.77' })); // a home-lan address this machine no longer has
+  const { token } = await buildInvite({ busDir: owner, peerSpecs: ['self=100.90.0.4'], name: 'laptop', repo: 'https://github.com/example/agentbus' });
+  const r = await join({ busDir: member, token, bind: '100.70.0.9' });
+  assert.equal(r.updated, true); assert.equal(r.port, 47800); assert.equal(r.bind, '100.70.0.9');
+  assert.ok(r.notes.some((n) => /os-assigned/.test(n)) && r.notes.some((n) => /192\.168\.77\.77/.test(n)));
+  const after = loadLan(member);
+  assert.equal(after.hostId, before.hostId); assert.ok(after.key.equals(ownerConfig.key)); assert.equal(after.mdns, undefined);
+  assert.deepEqual(after.peers.map((p) => p.hostId), [ownerConfig.hostId]);
+  // a valid 0.0.0.0 bind and fixed port are left alone
+  fs.writeFileSync(cfgFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(cfgFile, 'utf8')), bind: '0.0.0.0', port: 5555 }));
+  const again = await join({ busDir: member, token });
+  assert.equal(again.bind, '0.0.0.0'); assert.equal(again.port, 5555); assert.deepEqual(again.notes, []);
+});
+
+test('a learned peer that comes back on a new port is followed', async (t) => {
+  const { A, cb, peerA } = await wanPair(t, { storage: false });
+  await peerRequest(cb, peerA, { op: 'agents', listen: { port: 40001 } }, 3000);
+  assert.equal(A.peers.get(cb.hostId).port, 40001);
+  await peerRequest(cb, peerA, { op: 'agents', listen: { port: 40002 } }, 3000);
+  assert.equal(A.peers.get(cb.hostId).port, 40002);
+  assert.equal(A.peers.get(cb.hostId).learned, true);
+});
