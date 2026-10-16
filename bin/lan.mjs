@@ -18,8 +18,8 @@ export async function runLan(args) {
     console.log(JSON.stringify(initLan({ name, keyFile, port: port === undefined ? 0 : Number(port), bind, smsPrimary, mdnsInterface, peers, mdns }), null, 2));
   } else if (command === 'join') {
     const { join } = await import('../lib/wan.mjs');
-    const name = option('--name'), port = option('--port'), bind = option('--bind'), token = args.shift();
-    if (!token || args.length) throw Error("usage: agentbus lan join '<agentbus-join-v1:...>' [--name name] [--port 47800] [--bind 100.x.y.z]");
+    const name = option('--name') || process.env.AGENTBUS_NAME || undefined, port = option('--port') || process.env.AGENTBUS_PORT || undefined, bind = option('--bind'), token = args.shift() || process.env.AGENTBUS_JOIN_TOKEN;
+    if (!token || args.length) throw Error("usage: agentbus lan join '<agentbus-join-v1:...>' [--name name] [--port 47800] [--bind 100.x.y.z]  (or env AGENTBUS_JOIN_TOKEN, AGENTBUS_NAME, AGENTBUS_PORT)");
     const result = await join({ token, name, bind, ...(port ? { port: Number(port) } : {}) });
     console.log(JSON.stringify({ ...result, keyFile: undefined, next: 'agentbus lan install, then agentbus lan doctor' }, null, 2));
   } else if (command === 'invite') {

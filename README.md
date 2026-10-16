@@ -269,8 +269,11 @@ owner side, once (the host with shared task storage, e.g. the windows box):
    and the message also joins their machine to your tailnet: no tailscale account, invite or share needed on their side. the command refuses
    to print anything containing a phone number, email address or local secret.
 
-the joiner pastes that message into claude code, which runs `lan join`, `lan install`, registers the
-mcp server and runs `lan doctor`. `lan join` binds only to the joiner's tailscale address, disables
+the invite is a short block: a link to [docs/join.md](docs/join.md) (the generic setup steps) plus the
+secret values (name, peer, join token, optional tailscale auth key). the joiner pastes it into claude code,
+which follows the doc: `lan join`, `lan install`, mcp registration, `lan doctor`. auth keys last at most 90
+days, but only until first use. the joined device then lives on its node key (180 days by default), so for a
+long-lived peer, open the admin console machines page and choose disable key expiry on the new device. `lan join` binds only to the joiner's tailscale address, disables
 multicast, and configures the owner as a static peer. the owner learns the joiner's address from its
 first authenticated request and dials back. no manual peer entry is needed on the owner.
 
