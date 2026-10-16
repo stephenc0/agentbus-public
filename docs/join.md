@@ -97,6 +97,11 @@ every line must say `ok`:
 
 if a line fails, follow its `fix:` hint. if it still fails, report the doctor output to the human.
 
+macos: if commands run from claude code fail with `EHOSTUNREACH` or "no route to host" while
+`tailscale ping` works, macos local network privacy is blocking the app that launched them. the human
+allows it in system settings, under privacy & security, then local network, by turning on Claude
+(or the terminal app). the launchd daemon itself isn't affected.
+
 ## 8. finish
 
 report the doctor output to the human. tell them to restart claude code so the agentbus tools load.

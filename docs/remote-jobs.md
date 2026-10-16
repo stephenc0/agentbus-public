@@ -73,4 +73,5 @@ exists, including partial files.
 | `insufficient space on owner` | the owner's storage is full. purge old tasks |
 | `already exists ... with different contents` | rename with `--as`, or pass `--overwrite` |
 | upload is slow | run `tailscale ping OWNER`. `via DERP` means relayed (slow). `direct` is full speed |
+| `EHOSTUNREACH` from blob commands on macos while `tailscale ping` works | macos local network privacy is blocking the launching app. allow it under system settings, privacy & security, local network |
 | `this host owns no single rw storage entry` | you targeted a peer that isn't the storage owner |
