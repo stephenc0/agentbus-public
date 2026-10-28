@@ -1,0 +1,8 @@
+.git
+.claude
+node_modules
+**/node_modules
+*.log
+.DS_Store
+claw-messenger/config.json
+claw-messenger/.state

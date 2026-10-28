@@ -11,6 +11,14 @@ export async function runLan(args) {
   };
   const has = (name) => { const i = args.indexOf(name); if (i < 0) return false; args.splice(i, 1); return true; };
   const many = (name) => { const out = []; for (let v; (v = option(name)) !== undefined;) out.push(v); return out; };
+  // usd/hour: a number, never inferred. "" or absent means unknown.
+  const costArgs = () => {
+    const perHour = option('--cost-per-hour') ?? (process.env.AGENTBUS_GPU_COST_PER_HOUR || undefined), billing = option('--billing') ?? (process.env.AGENTBUS_BILLING || undefined);
+    const out = {};
+    if (perHour !== undefined) { if (!/^\d+(\.\d+)?$/.test(perHour)) throw Error('--cost-per-hour must be a non-negative number of usd per hour'); out.gpu_cost_per_hour = Number(perHour); }
+    if (billing !== undefined) out.billing = billing;
+    return Object.keys(out).length ? out : undefined;
+  };
   const parsePeer = (spec) => { const m = /^([0-9a-f-]{36})@([^:]+):(\d+)(?:=(.+))?$/i.exec(spec); if (!m) throw Error(`bad --peer ${spec}; expected HOST_UUID@ADDRESS:PORT[=name]`); return { hostId: m[1].toLowerCase(), address: m[2], port: Number(m[3]), ...(m[4] ? { name: m[4] } : {}) }; };
   if (command === 'init') {
     const name = option('--name'), keyFile = option('--key-file'), port = option('--port'), bind = option('--bind'), smsPrimary = option('--sms-primary'), mdnsInterface = option('--mdns-interface'), peers = many('--peer').map(parsePeer), mdns = !has('--no-mdns');
@@ -18,9 +26,12 @@ export async function runLan(args) {
     console.log(JSON.stringify(initLan({ name, keyFile, port: port === undefined ? 0 : Number(port), bind, smsPrimary, mdnsInterface, peers, mdns }), null, 2));
   } else if (command === 'join') {
     const { join } = await import('../lib/wan.mjs');
-    const name = option('--name') || process.env.AGENTBUS_NAME || undefined, port = option('--port') || process.env.AGENTBUS_PORT || undefined, bind = option('--bind'), token = args.shift() || process.env.AGENTBUS_JOIN_TOKEN;
-    if (!token || args.length) throw Error("usage: agentbus lan join '<agentbus-join-v1:...>' [--name name] [--port 47800] [--bind 100.x.y.z]  (or env AGENTBUS_JOIN_TOKEN, AGENTBUS_NAME, AGENTBUS_PORT)");
-    const result = await join({ token, name, bind, ...(port ? { port: Number(port) } : {}) });
+    const name = option('--name') || process.env.AGENTBUS_NAME || undefined, port = option('--port') || process.env.AGENTBUS_PORT || undefined, bind = option('--bind');
+    const userspace = has('--userspace-tailscale'), socks5 = option('--socks5'), advertiseAddress = option('--advertise-address'), ephemeral = has('--ephemeral'), cost = costArgs();
+    const token = args.shift() || process.env.AGENTBUS_JOIN_TOKEN;
+    if (!token || args.length) throw Error("usage: agentbus lan join '<agentbus-join-v1:...>' [--name name] [--port 47800] [--bind 100.x.y.z | --userspace-tailscale [--socks5 127.0.0.1:1055] [--advertise-address 100.x.y.z] [--ephemeral]] [--cost-per-hour 2.89 --billing 'label']  (or env AGENTBUS_JOIN_TOKEN, AGENTBUS_NAME, AGENTBUS_PORT, AGENTBUS_GPU_COST_PER_HOUR, AGENTBUS_BILLING)");
+    if (!userspace && (socks5 || advertiseAddress || ephemeral)) throw Error('--socks5, --advertise-address and --ephemeral need --userspace-tailscale');
+    const result = await join({ token, name, bind, cost, ...(userspace ? { userspace: { socks5, advertiseAddress, ephemeral } } : {}), ...(port ? { port: Number(port) } : {}) });
     console.log(JSON.stringify({ ...result, keyFile: undefined, next: 'agentbus lan install, then agentbus lan doctor' }, null, 2));
   } else if (command === 'invite') {
     const { buildInvite } = await import('../lib/wan.mjs');
@@ -43,6 +54,12 @@ export async function runLan(args) {
       const hostId = args.shift(); if (!UUID.test(hostId || '') || args.length) throw Error('usage: agentbus lan peer remove HOST_UUID');
       console.log(JSON.stringify(updateLanConfig(undefined, (c) => ({ ...c, peers: (c.peers || []).filter((p) => p.hostId !== hostId) })).peers || [], null, 2));
     } else throw Error('usage: agentbus lan peer list | add --id HOST_UUID --address ADDR --port PORT [--name n] | remove HOST_UUID');
+  } else if (command === 'cost') {
+    // the price this host advertises next to its gpu memory. owned hardware: --cost-per-hour 0 --billing owned. --clear: unknown.
+    const clear = has('--clear'), cost = costArgs();
+    if (args.length || (!clear && !cost) || (clear && cost)) throw Error("usage: agentbus lan cost --cost-per-hour 0 --billing owned | --cost-per-hour 2.89 --billing 'runpod secure cloud on-demand' | --clear");
+    const next = updateLanConfig(undefined, (c) => { const out = { ...c, ...(cost || {}) }; if (clear) { delete out.gpu_cost_per_hour; delete out.billing; } return out; });
+    console.log(JSON.stringify({ gpu_cost_per_hour: next.gpu_cost_per_hour ?? null, billing: next.billing ?? null, note: 'the running daemon picks this up on its next poll (about 10s)' }, null, 2));
   } else if (command === 'doctor') {
     const { doctor } = await import('../lib/wan.mjs');
     const ok = await doctor({ roundtrip: !has('--no-roundtrip') });
@@ -66,5 +83,5 @@ export async function runLan(args) {
     let stopping = false;
     const stop = async () => { if (stopping) return; stopping = true; await daemon.close(); };
     process.on('SIGINT', stop); process.on('SIGTERM', stop);
-  } else throw Error('usage: agentbus lan init [--name name] [--key-file file] [--port port] [--bind IPv4] [--sms-primary self|host-id] [--mdns-interface adapter|IPv4] [--peer HOST_UUID@ADDR:PORT[=name]] [--no-mdns] | lan join TOKEN | lan invite --repo URL --peer NAME=ADDR[:PORT] | lan peer list|add|remove | lan doctor | lan serve | lan status | lan forget-host <uuid> | lan install | lan stop');
+  } else throw Error('usage: agentbus lan init [--name name] [--key-file file] [--port port] [--bind IPv4] [--sms-primary self|host-id] [--mdns-interface adapter|IPv4] [--peer HOST_UUID@ADDR:PORT[=name]] [--no-mdns] | lan join TOKEN [--userspace-tailscale] | lan cost --cost-per-hour N --billing label|--clear | lan invite --repo URL --peer NAME=ADDR[:PORT] | lan peer list|add|remove | lan doctor | lan serve | lan status | lan forget-host <uuid> | lan install | lan stop');
 }

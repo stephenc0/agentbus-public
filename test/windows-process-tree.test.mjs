@@ -1,3 +1,4 @@
+import { serialize } from './serial-lock.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -47,7 +48,8 @@ async function fixture(t) {
   return { child, pids };
 }
 
-test('kills a live tree with churning and late-forking descendants and certifies absence', { skip: !win, timeout: 90000 }, async (t) => {
+test('kills a live tree with churning and late-forking descendants and certifies absence', { skip: !win, timeout: 330000 }, async (t) => {
+  await serialize(t, 'process-trees'); // never overlaps the other file's process-tree tests, cleanup included
   for (let round = 0; round < 5; round++) {
     const { pids, child } = await fixture(t);
     const r = await tree(child.pid);
@@ -57,7 +59,8 @@ test('kills a live tree with churning and late-forking descendants and certifies
   }
 });
 
-test('exited leader fails closed and leaves orphans untouched', { skip: !win, timeout: 30000 }, async (t) => {
+test('exited leader fails closed and leaves orphans untouched', { skip: !win, timeout: 270000 }, async (t) => {
+  await serialize(t, 'process-trees'); // never overlaps the other file's process-tree tests, cleanup included
   const { child, pids } = await fixture(t);
   process.kill(pids.leader, 'SIGKILL'); await new Promise((r) => child.once('exit', r));
   const r = await tree(pids.leader);
@@ -65,7 +68,8 @@ test('exited leader fails closed and leaves orphans untouched', { skip: !win, ti
   assert(alive(pids.mid) && alive(pids.grand), 'orphans untouched');
 });
 
-test('leader not spawned by the claimed supervisor is never killed', { skip: !win, timeout: 30000 }, async (t) => {
+test('leader not spawned by the claimed supervisor is never killed', { skip: !win, timeout: 270000 }, async (t) => {
+  await serialize(t, 'process-trees'); // never overlaps the other file's process-tree tests, cleanup included
   const { child, pids } = await fixture(t);
   // The fixture's mid process is live but its parent is the leader, not us.
   const r = await tree(pids.mid);
@@ -77,7 +81,8 @@ test('leader not spawned by the claimed supervisor is never killed', { skip: !wi
 
 // Real native runtime: initialize and start an ephemeral thread under the
 // windows sandbox so the runtime spawns its helper descendants, then certify.
-test('installed codex app-server tree is terminated and certified', { skip: !(win && process.env.AGENTBUS_TEST_CODEX), timeout: 60000 }, async (t) => {
+test('installed codex app-server tree is terminated and certified', { skip: !(win && process.env.AGENTBUS_TEST_CODEX), timeout: 300000 }, async (t) => {
+  await serialize(t, 'process-trees'); // never overlaps the other file's process-tree tests, cleanup included
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-tree-codex-'));
   const home = path.join(dir, 'codex'), cwd = path.join(dir, 'work'); fs.mkdirSync(home); fs.mkdirSync(cwd);
   fs.writeFileSync(path.join(home, 'config.toml'), `[windows]\nsandbox = "${process.env.TREE_WINDOWS_SANDBOX || 'unelevated'}"\n`);

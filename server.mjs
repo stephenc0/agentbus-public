@@ -12,7 +12,7 @@ const text = (s) => ({ content: [{ type: "text", text: typeof s === "string" ? s
 
 server.tool('spawn_session',
   'Launch a session locally or on a paired LAN host. Requires destination launch policy and an allowed destination workspace. codex/claude-code run tasks; claude-desktop only opens a prefilled Code composer requiring the user to confirm/send (no model/name overrides, no agent id). Ordinary desktop chat is unsupported. Use a stable request_id for retries; never change it after uncertain delivery. Starting is not proof of a routable session: poll session_launch_status. Native login/trust and permissions apply; never delegate work denied in your own session. Check host_status before heavy work.',
-  { runtime: z.enum(['codex', 'claude-code', 'claude-desktop']), cwd: z.string(), prompt: z.string(), host: z.string().optional().describe('local, peer hostname, or host UUID'), model: z.string().optional(), name: z.string().optional(), permission_profile: z.string().optional().describe('codex only: destination-owned named native sandbox grant'), request_id: z.string().uuid().optional(), from: z.string().optional() },
+  { runtime: z.enum(['codex', 'claude-code', 'claude-desktop']), cwd: z.string(), prompt: z.string(), host: z.string().optional().describe('local, peer hostname, or host UUID'), model: z.string().optional(), name: z.string().optional(), permission_profile: z.string().optional().describe('codex only: destination-owned named native sandbox grant'), claims: z.array(z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/)).max(8).optional().describe("resource claims, e.g. ['gpu']: set for compute jobs. while the launched job is working, the destination host publishes compute=true, jobs and gpu=avoid in its presence so peers defer. drops automatically when the job ends or is stopped. without a claim the launch is only listed as unclaimed and peers will not defer to it"), request_id: z.string().uuid().optional(), from: z.string().optional() },
   async ({ request_id, from, ...request }) => {
     const { spawnSession } = await import('./lib/session-launch.mjs');
     const { listAgents } = await import('./lib/core.mjs');
@@ -24,7 +24,7 @@ server.tool('session_launch_status', 'Inspect a durable launch receipt or availa
     const { createLauncher, refreshLauncherCapabilities } = await import('./lib/session-launch.mjs');
     const { localLanRequest } = await import('./lib/lan.mjs');
     const { listAgents } = await import('./lib/core.mjs');
-    if (!request_id) { const lan = await localLanRequest({ op: 'status' }, { timeout: 2000 }); return text({ local: await refreshLauncherCapabilities(), peers: lan.peers?.map((p) => ({ hostId: p.hostId, name: p.name, launching: p.launching })) || [] }); }
+    if (!request_id) { const lan = await localLanRequest({ op: 'status' }, { timeout: 2000 }); return text({ local: await refreshLauncherCapabilities(undefined, { listLocal: listAgents }), peers: lan.peers?.map((p) => ({ hostId: p.hostId, name: p.name, launching: p.launching })) || [] }); }
     if (host && host !== 'local') return text(await localLanRequest({ op: 'spawn-status', id: request_id, host, from: selfIdentity(from)?.id }));
     try { return text(await createLauncher({ listLocal: listAgents }).status(request_id)); } catch (e) { return text({ ok: false, error: e.message }); }
   });
@@ -36,6 +36,29 @@ server.tool('stop_spawned_session', 'Stop a session created through spawn_sessio
     const { listAgents } = await import('./lib/core.mjs');
     if (host && host !== 'local') return text(await localLanRequest({ op: 'spawn-stop', id: request_id, host, from: selfIdentity(from)?.id }));
     try { return text(await createLauncher({ listLocal: listAgents }).stop(request_id)); } catch (e) { return text({ ok: false, error: e.message }); }
+  });
+
+server.tool('cloud_status',
+  'On-demand cloud gpu pods (e.g. runpod h100 80 gb) offered by the group\'s provisioner host. Lists each offer with state (dormant | starting | live | stopping), gpu memory, hourly price, cold start, hard cap and idle countdown, who started it, and whether this host reaches a live pod directly. A live pod is also a normal peer under the offer name: use blob put/get and spawn_session (claims [\'gpu\']) against it like any owner. Prefer free owned hosts (host_status shows $0/h) when the job fits their gpu memory.',
+  { json: z.boolean().optional() },
+  async ({ json }) => {
+    const { cloudCall, formatCloudStatus } = await import('./bin/cloud.mjs');
+    const r = await cloudCall({ action: 'status' });
+    return text(json ? r : formatCloudStatus(r));
+  });
+server.tool('cloud_up',
+  'Start (or join) an on-demand cloud gpu pod from the provisioner. COSTS REAL MONEY: max_hours or max_usd is required and is enforced by the provisioner as a hard lifetime/spend cap; the pod is also terminated after ~15 idle minutes (no claimed job, no blob transfer, no finished out/SUMMARY.md left unfetched). Returns at once (state starting) unless wait_minutes is set; poll cloud_status until live (cold start is several minutes). If the offer is already live you share it and its caps stay as set. Then: blob put --host <offer>, spawn_session host=<offer> claims=[\'gpu\'], blob get. Fetched task folders are purged from the pod\'s volume before it stops.',
+  { offer: z.string().describe('offer name from cloud_status, e.g. runpod-h100'), max_hours: z.number().positive().optional(), max_usd: z.number().positive().optional(), wait_minutes: z.number().min(0).max(30).optional(), host: z.string().optional().describe('provisioner host, if several'), from: z.string().optional() },
+  async ({ offer, max_hours, max_usd, wait_minutes, host, from }) => {
+    const { cloudCall } = await import('./bin/cloud.mjs');
+    return text(await cloudCall({ action: 'up', offer, host, maxHours: max_hours, maxUsd: max_usd, waitMinutes: wait_minutes || 0, from: selfIdentity(from)?.id }));
+  });
+server.tool('cloud_down',
+  'Stop a live or starting cloud pod now instead of waiting for the idle rule. Refuses while a claimed job runs or finished results are unfetched, unless force=true (force keeps unfetched task folders on the volume unless purge_all=true). Fetched task folders are purged before termination.',
+  { offer: z.string(), force: z.boolean().optional(), purge_all: z.boolean().optional(), host: z.string().optional(), from: z.string().optional() },
+  async ({ offer, force, purge_all, host, from }) => {
+    const { cloudCall } = await import('./bin/cloud.mjs');
+    return text(await cloudCall({ action: 'down', offer, host, force, purgeAll: purge_all, from: selfIdentity(from)?.id }));
   });
 
 server.tool(

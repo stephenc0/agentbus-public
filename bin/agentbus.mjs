@@ -38,6 +38,11 @@ switch (cmd) {
     try { await runBlob(args); } catch (e) { console.error(e.message); process.exit(e.message.startsWith('usage:') ? 2 : 1); }
     break;
   }
+  case "cloud": {
+    const { runCloud } = await import("./cloud.mjs");
+    try { await runCloud(args); } catch (e) { console.error(e.message); process.exit(e.message.startsWith('usage:') ? 2 : 1); }
+    break;
+  }
   case "lan": {
     const { runLan } = await import("./lan.mjs");
     await runLan(args);
@@ -104,6 +109,6 @@ switch (cmd) {
     console.log(JSON.stringify(selfIdentity(), null, 2));
     break;
   default:
-    console.error("usage: agentbus [list [--json] | send <to> <msg...> [--from id] | inbox <thread> [--peek] | whoami | presence [--json] | busy [reason] [--for 2h] | available [--for 2h] | auto | install-codex-bridge [--binary path] | uninstall-codex-bridge | bridge-status [--thread id] | launch-codex | lan <init|serve|status> | storage <add|list|remove>]");
+    console.error("usage: agentbus [list [--json] | send <to> <msg...> [--from id] | inbox <thread> [--peek] | whoami | presence [--json] | busy [reason] [--for 2h] | available [--for 2h] | auto | install-codex-bridge [--binary path] | uninstall-codex-bridge | bridge-status [--thread id] | launch-codex | lan <init|serve|status> | cloud <status|up|down> | storage <add|list|remove>]");
     process.exit(2);
 }

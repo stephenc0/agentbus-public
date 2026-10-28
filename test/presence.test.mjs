@@ -3,13 +3,33 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { assessPresence, sanitizePresence, setOverride, readOverride, parseDuration, presenceTracker, readSnapshot, createPresenceSampler, AWAY_AFTER_SEC } from '../lib/presence.mjs';
 
-test('fullscreen means busy and avoid, whatever the gpu reads', () => {
+test('a fullscreen game means busy and avoid, whatever the gpu reads; unknown apps count as games', () => {
   const p = assessPresence({ userIdleSec: 0, fullscreen: true, fullscreenApp: 'WardogsClient-Win64-Shipping', gpuUtil: 10 });
   assert.equal(p.user, 'busy');
-  assert.equal(p.gpu, 'avoid');
-  assert.match(p.reasons[0], /fullscreen app WardogsClient/);
+  assert.equal(p.gpu, 'avoid'); assert.equal(p.fullscreenGame, true);
+  assert.match(p.reasons[0], /fullscreen game: WardogsClient.*not on the non-game list/);
+  const unnamed = assessPresence({ userIdleSec: 0, fullscreen: true, gpuUtil: 0 });
+  assert.equal(unnamed.gpu, 'avoid'); assert.match(unnamed.reasons[0], /fullscreen game: unidentified app/);
+});
+
+test('fullscreen non-game apps (video, browser, slides) mark the human busy but leave the gpu shared', () => {
+  for (const app of ['chrome', 'Chrome', 'msedge.exe', 'vlc', 'mpv', 'POWERPNT', 'potplayermini64']) {
+    const p = assessPresence({ userIdleSec: 0, fullscreen: true, fullscreenApp: app, fullscreenBasis: 'foreground-monitor', shellState: 'busy', gpuUtil: 20 });
+    assert.equal(p.user, 'busy', app); assert.equal(p.gpu, 'shared', app); assert.equal(p.fullscreenGame, false, app);
+    assert.match(p.reasons[0], /fullscreen non-game app .* \(foreground covers monitor; gpu stays shared\)/, app);
+  }
+  const yt = { userIdleSec: 0, fullscreen: true, fullscreenApp: 'chrome', fullscreenBasis: 'foreground-monitor' };
+  // every other avoid path still applies on top of a non-game fullscreen
+  assert.equal(assessPresence({ ...yt, gpuUtil: 90 }, null, Date.now(), [90]).gpu, 'avoid');
+  assert.equal(assessPresence({ ...yt, gpuUtil: 0 }, { state: 'busy' }).gpu, 'avoid');
+  // the shell saying exclusive d3d outranks the process name
+  const d3d = assessPresence({ ...yt, shellState: 'd3d_fullscreen', gpuUtil: 0 });
+  assert.equal(d3d.gpu, 'avoid'); assert.match(d3d.reasons[0], /fullscreen game: chrome .*exclusive d3d/);
+  assert.equal(sanitizePresence(assessPresence({ ...yt, gpuUtil: 0 })).fullscreenGame, false);
+  assert.equal(sanitizePresence({ fullscreenGame: 'yes' }).fullscreenGame, null);
 });
 
 test('idle and locked hosts are free; active hosts are shared', () => {
@@ -174,20 +194,22 @@ test('windows busy notification state is unconfirmed, not invented fullscreen', 
   assert.equal(p.probeObservedAt, 1_000);
   assert.match(formatPresence(p), /shell=busy, foreground=editor \(pid 123\), monitor coverage=false, sample age=/);
 });
-test('windows D3D, foreground coverage and presentation stay protected at zero utilization', () => {
+test('windows D3D and unknown covering apps stay protected at zero utilization; presentation is busy but shared', () => {
   const d3d = assessPresence(windowsSample(3));
   assert.equal(d3d.gpu, 'avoid'); assert.equal(d3d.fullscreen, true);
   assert.equal(d3d.fullscreenApp, null); assert.equal(d3d.fullscreenBasis, 'shell-d3d');
-  assert.match(d3d.reasons[0], /process unidentified/);
+  assert.match(d3d.reasons[0], /fullscreen game: exclusive d3d .*process unidentified/);
   for (const state of [2, 5, 7]) {
     const p = assessPresence(windowsSample(state, { foregroundCoversMonitor: true, foreground: 'game' }));
     assert.equal(p.gpu, 'avoid'); assert.equal(p.fullscreenApp, 'game');
     assert.equal(p.fullscreenBasis, 'foreground-monitor');
   }
   const presentation = assessPresence(windowsSample(4));
-  assert.equal(presentation.gpu, 'avoid'); assert.equal(presentation.user, 'busy');
+  assert.equal(presentation.gpu, 'shared'); assert.equal(presentation.user, 'busy');
   assert.equal(presentation.fullscreen, false); assert.equal(presentation.fullscreenApp, null);
-  assert.match(presentation.reasons[0], /presentation mode/);
+  assert.match(presentation.reasons[0], /presentation mode .*not a game/);
+  const video = assessPresence(windowsSample(2, { foregroundCoversMonitor: true, foreground: 'chrome' }));
+  assert.equal(video.user, 'busy'); assert.equal(video.gpu, 'shared'); assert.equal(video.fullscreenBasis, 'foreground-monitor');
 });
 test('windows app/quiet/normal states do not imply fullscreen; overrides and GPU still apply', () => {
   for (const state of [5, 6, 7]) {
@@ -206,4 +228,100 @@ test('windows evidence survives sanitization but spoofed arbitrary fields do not
   assert.equal(p.foreground, 'editor '); assert.equal(p.foregroundPid, null);
   assert.equal(p.shellState, 'busy'); assert.equal(p.secret, undefined);
   assert.equal(sanitizePresence({ shellState: 'invented', fullscreenBasis: 'invented' }).shellState, null);
+});
+
+test('a live compute job for a peer means gpu=avoid, same tier as a manual busy mark; overrides still win', async () => {
+  const { normalizeWindowsProbe, formatPresence } = await import('../lib/presence.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-jobs-pres-'));
+  try {
+    const job = { id: '2b8e6f14-9c3d-4a7e-b5f2-0d1c6a9e4b83', name: 'colabfold demo-complex-b', runtime: 'claude-code', source: 'b29c1927-9f56-4f94-845f-4b53a2fa231b', sourceName: 'laptop', sourceAgent: 'claude:a45dd0c3', agentId: 'claude:bec29ebf', since: 1, claims: ['gpu'] };
+    const idle = { userIdleSec: 9999, fullscreen: false, gpuUtil: 0, jobs: [job], wsl: true };
+    const p = assessPresence(idle);
+    assert.equal(p.gpu, 'avoid'); assert.equal(p.user, 'away', 'a remote job does not make the human busy');
+    assert.equal(p.compute, true); assert.equal(p.wsl, true); assert.equal(p.jobs.length, 1); assert.equal(p.jobs[0].name, job.name);
+    assert.equal(p.reasons[0], 'compute job: colabfold demo-complex-b [gpu] for laptop');
+    assert.match(p.guidance, /do not start/);
+    const none = assessPresence({ ...idle, jobs: [] });
+    assert.equal(none.gpu, 'free'); assert.equal(none.compute, false); assert.deepEqual(none.jobs, []);
+    assert.equal(assessPresence({ userIdleSec: 1, jobs: [job] }).wsl, null);
+    setOverride('busy', { reason: 'rendering', dir });
+    const busy = assessPresence(idle, readOverride(dir));
+    assert.match(busy.reasons[0], /marked busy/); assert.match(busy.reasons[1], /compute job/); assert.equal(busy.user, 'busy');
+    setOverride('available', { dir });
+    assert.equal(assessPresence(idle, readOverride(dir)).gpu, 'free', 'manual available wins over a claim');
+    assert.equal(assessPresence({ ...idle, gpuUtil: 90 }, readOverride(dir), Date.now(), [90]).gpu, 'avoid');
+    // sanitizer round trip: what a peer sees
+    const s = sanitizePresence(p);
+    assert.equal(s.compute, true); assert.equal(s.wsl, true); assert.deepEqual(s.jobs, p.jobs); assert.match(s.reasons[0], /compute job/);
+    const junk = sanitizePresence({ at: 1, user: 'away', gpu: 'avoid', compute: 'yes', wsl: 'true', jobs: [{ id: 'bogus' }, { ...job, claims: 'gpu', name: 'n\u0000' }] });
+    assert.equal(junk.compute, false); assert.equal(junk.wsl, null); assert.equal(junk.jobs.length, 1); assert.deepEqual(junk.jobs[0].claims, []); assert.equal(junk.jobs[0].name, 'n ');
+    assert.match(formatPresence(s), /compute=true \(colabfold demo-complex-b \[gpu\] for laptop\), wsl vm running/);
+    assert.match(formatPresence(sanitizePresence(none)), /compute=false/);
+    // windows probe plumbs the vm flag; anything but a boolean is unknown
+    assert.equal(normalizeWindowsProbe({ ok: true, idleMs: 5, notificationState: 5, wsl: true }).wsl, true);
+    assert.equal(normalizeWindowsProbe({ ok: true, idleMs: 5, notificationState: 5, wsl: 'yes' }).wsl, null);
+    assert.equal(normalizeWindowsProbe({ ok: false }).wsl, null);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('an unclaimed live launch is published as unclaimed and never moves gpu, user or compute', async () => {
+  const { formatPresence } = await import('../lib/presence.mjs');
+  const launch = { id: '1ae14fad-773f-445d-9eaa-7e20d25476e3', name: 'colabfold-demo-complex-c', runtime: 'claude-code', source: 'b29c1927-9f56-4f94-845f-4b53a2fa231b', sourceName: 'laptop', sourceAgent: 'claude:a45dd0c3', agentId: 'claude:d7337c2e', since: 1, claims: [] };
+  const claimed = { ...launch, id: '2b8e6f14-9c3d-4a7e-b5f2-0d1c6a9e4b83', name: 'render', claims: ['gpu'] };
+  const idle = assessPresence({ userIdleSec: 9999, fullscreen: false, gpuUtil: 0, jobs: [launch] });
+  assert.equal(idle.gpu, 'free', 'no claim, no promise about load: an idle gpu stays free'); assert.equal(idle.user, 'away');
+  assert.equal(idle.compute, false); assert.deepEqual(idle.jobs, []); assert.deepEqual(idle.unclaimed.map((j) => j.name), ['colabfold-demo-complex-c']);
+  assert.ok(!idle.reasons.some((r) => /compute|colabfold/.test(r)));
+  // the observed winbox case: a loaded gpu is avoided by the sustained-load rule, still with no fabricated job
+  const loaded = assessPresence({ userIdleSec: 9999, fullscreen: false, gpuUtil: 100, jobs: [launch] }, null, Date.now(), [100]);
+  assert.equal(loaded.gpu, 'avoid'); assert.equal(loaded.compute, false); assert.equal(loaded.unclaimed.length, 1);
+  const both = assessPresence({ userIdleSec: 9999, gpuUtil: 0, jobs: [launch, claimed] });
+  assert.deepEqual(both.jobs.map((j) => j.name), ['render']); assert.deepEqual(both.unclaimed.map((j) => j.name), ['colabfold-demo-complex-c']); assert.equal(both.compute, true);
+  const s = sanitizePresence(idle);
+  assert.deepEqual(s.unclaimed, idle.unclaimed); assert.deepEqual(sanitizePresence({ unclaimed: 'x' }).unclaimed, []);
+  assert.match(formatPresence(s), /compute=false; unclaimed launches \(no compute claim\): colabfold-demo-complex-c for laptop/);
+  assert.doesNotMatch(formatPresence(sanitizePresence(assessPresence({ userIdleSec: 9999, gpuUtil: 0, jobs: [] }))), /unclaimed/);
+});
+
+test('presence still links and assesses against a launch-jobs module cached from before unclaimed existed', async () => {
+  // a long-lived mcp server imports presence lazily: it can pair a fresh presence.mjs with an old cached launch-jobs.mjs.
+  const lib = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-mixed-'));
+  try {
+    const real = new URL('../lib/', import.meta.url);
+    for (const f of fs.readdirSync(real)) fs.copyFileSync(new URL(f, real), path.join(lib, f));
+    fs.writeFileSync(path.join(lib, 'launch-jobs.mjs'), `export { listLaunchJobs, sanitizeJobs, describeJob, sanitizeClaims, staleLaunch, TERMINAL, MAX_JOBS } from ${JSON.stringify(new URL('launch-jobs.mjs', real).href)};\n`);
+    const old = await import(pathToFileURL(path.join(lib, 'presence.mjs')).href);
+    const job = { id: '2b8e6f14-9c3d-4a7e-b5f2-0d1c6a9e4b83', name: 'render', runtime: 'claude-code', source: 'local', since: 1, claims: ['gpu'] };
+    const p = old.assessPresence({ userIdleSec: 9999, gpuUtil: 0, jobs: [job] });
+    assert.equal(p.compute, true); assert.equal(p.gpu, 'avoid'); assert.deepEqual(p.unclaimed, []);
+  } finally { fs.rmSync(lib, { recursive: true, force: true }); }
+});
+
+test('tracker derives jobs from the launch receipts on its tick, and a one-shot localPresence re-derives them', async () => {
+  const { localPresence } = await import('../lib/presence.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-trk-jobs-'));
+  try {
+    const launches = path.join(dir, 'launches'); fs.mkdirSync(launches);
+    const id = '7d2e9c4a-5b1f-4e8a-9c3d-2f6a8b0e4d17';
+    const write = (over) => fs.writeFileSync(path.join(launches, id + '.json'), JSON.stringify({ source: 'local/claude:me', request: { id, runtime: 'claude-code', cwd: dir, prompt: 'p', name: 'render', claims: ['gpu'] }, state: 'running', nativeState: 'working', workerPid: process.pid, createdAt: 1, updatedAt: Date.now(), ...over }));
+    write({});
+    const t = presenceTracker({ sampler: { sample: async () => ({ userIdleSec: 9999, gpuUtil: 0 }), close() {} }, dir });
+    const p = await t.update();
+    assert.equal(p.gpu, 'avoid'); assert.equal(p.compute, true); assert.equal(p.jobs[0].id, id); assert.equal(p.jobs[0].sourceName, 'local');
+    assert.equal(readSnapshot(dir).raw.jobs[0].name, 'render');
+    assert.equal(t.current().compute, true);
+    write({ state: 'stopped', nativeState: 'done' });
+    assert.equal(t.current().compute, true, 'current() rides the tick, not the disk');
+    assert.equal((await t.update()).compute, false);
+    assert.equal((await t.update()).gpu, 'free');
+    write({});
+    const one = await localPresence({ dir, homeSampler: { sample: async () => ({ status: 'disabled' }), close() {} } });
+    assert.equal(one.compute, true, 'cli/mcp read re-derives jobs from disk against the daemon snapshot');
+    write({ request: { id, runtime: 'claude-code', cwd: dir, prompt: 'p', name: 'render' } });
+    const unclaimed = await t.update();
+    assert.equal(unclaimed.compute, false); assert.equal(unclaimed.gpu, 'free'); assert.equal(unclaimed.unclaimed[0].id, id, 'a spawn without claims is visible but not compute');
+    const broken = presenceTracker({ sampler: { sample: async () => ({ userIdleSec: 9999, gpuUtil: 0 }), close() {} }, dir, jobs: () => { throw Error('boom'); } });
+    assert.equal((await broken.update()).compute, false, 'a jobs failure never breaks presence');
+    t.close(); broken.close();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

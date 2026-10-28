@@ -15,11 +15,19 @@ export async function runSessions(args) {
     done(configureLaunch({ roots, remote, maxSessions: max === undefined ? 4 : Number(max), runtimes: { codex, claude }, permissionProfiles: profilesFile ? JSON.parse(fs.readFileSync(profilesFile, 'utf8')) : undefined }));
   } else if (command === 'capabilities') {
     const lan = await localLanRequest({ op: 'status' }, { timeout: 2000 });
-    done({ local: await refreshLauncherCapabilities(), peers: lan.peers?.map((p) => ({ hostId: p.hostId, name: p.name, launching: p.launching })) || [] });
+    done({ local: await refreshLauncherCapabilities(undefined, { listLocal: listAgents }), peers: lan.peers?.map((p) => ({ hostId: p.hostId, name: p.name, launching: p.launching })) || [] });
   } else if (command === 'spawn') {
     const runtime = option('--runtime'), cwd = option('--cwd'), host = option('--host'), model = option('--model'), name = option('--name'), id = option('--id'), from = option('--from'), promptFile = option('--prompt-file'), permission_profile = option('--permission-profile');
+    const claims = []; let claim; while ((claim = option('--claim')) !== undefined) claims.push(claim);
     const prompt = promptFile ? fs.readFileSync(promptFile, 'utf8') : args.join(' ');
-    done(await spawnSession({ runtime, cwd, host, model, name, id, permission_profile, from: selfIdentity(from)?.id, prompt }, { listLocal: listAgents }));
+    done(await spawnSession({ runtime, cwd, host, model, name, id, permission_profile, ...(claims.length ? { claims } : {}), from: selfIdentity(from)?.id, prompt }, { listLocal: listAgents }));
+  } else if (command === 'reconcile') {
+    // local host owner only: list receipts that hold no slot any more, or close one of them.
+    const close = option('--close');
+    if (args.length) throw Error('usage: agentbus sessions reconcile [--close <launch-uuid>]');
+    const launcher = createLauncher({ listLocal: listAgents });
+    if (close) { if (!UUID.test(close)) throw Error('--close requires a launch UUID'); done(launcher.close(close)); }
+    else { const stale = launcher.stale(); done({ ok: true, stale, note: stale.length ? 'these no longer count toward maxSessions; `--close <id>` marks one stopped (termination unverified)' : 'no stale launch receipts' }); }
   } else if (command === 'status') {
     const host = option('--host'), from = option('--from'), id = args.shift();
     done(host && host !== 'local' ? await localLanRequest({ op: 'spawn-status', id, host, from: selfIdentity(from)?.id }) : await createLauncher({ listLocal: listAgents }).status(id));
@@ -27,5 +35,5 @@ export async function runSessions(args) {
     const host = option('--host'), from = option('--from'), id = args.shift();
     if (!UUID.test(id || '') || args.length) throw Error('stop requires one launch UUID');
     done(host && host !== 'local' ? await localLanRequest({ op: 'spawn-stop', id, host, from: selfIdentity(from)?.id }) : await createLauncher({ listLocal: listAgents }).stop(id));
-  } else throw Error('usage: agentbus sessions configure --root <path> [--root <path>] [--remote] [--max 4] [--profiles-file <json>] [--codex <executable>] [--claude <executable>] | capabilities | spawn --runtime codex|claude-code|claude-desktop --cwd <destination-path> [--host name|uuid] [--from id] [--model model] [--id uuid] [--permission-profile name] [--prompt-file file] <prompt> | status <uuid> [--host name] [--from id] | stop <launch-uuid> [--host name] [--from id]');
+  } else throw Error('usage: agentbus sessions configure --root <path> [--root <path>] [--remote] [--max 4] [--profiles-file <json>] [--codex <executable>] [--claude <executable>] | capabilities | spawn --runtime codex|claude-code|claude-desktop --cwd <destination-path> [--host name|uuid] [--from id] [--model model] [--id uuid] [--permission-profile name] [--claim gpu]... [--prompt-file file] <prompt> | status <uuid> [--host name] [--from id] | stop <launch-uuid> [--host name] [--from id] | reconcile [--close <launch-uuid>]');
 }

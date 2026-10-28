@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { readClaudeUsage, readCodexUsage, normalizeClaudeUsage, normalizeCodexUsage, resolveClaudeCredentials, CLAUDE_OAUTH_BETA } from '../lib/usage-sources.mjs';
+import { readClaudeUsage, readCodexUsage, normalizeClaudeUsage, normalizeCodexUsage, resolveClaudeCredentials, refreshClaudeCredentials, claudeKeychainService, CLAUDE_OAUTH_BETA, CLAUDE_TOKEN_URL, CLAUDE_OAUTH_CLIENT_ID, CLAUDE_KEYCHAIN_SERVICE } from '../lib/usage-sources.mjs';
 
 const SECRET = 'sk-ant-oat01-SECRETTOKEN', EMAIL = 'someone@example.com', ACCOUNT = '7fa41553-0000-0000-0000-000000000000';
 function home(t, { expiresAt = Date.now() + 3600_000, token = SECRET } = {}) {
@@ -61,8 +61,98 @@ test('claude: credential resolution order and expiry', async (t) => {
   assert.equal((await resolveClaudeCredentials({ home: '/nonexistent', env: { CLAUDE_CONFIG_DIR: alt }, platform: 'linux' })).token, 'alt-token');
   await rejects(resolveClaudeCredentials({ home: '/nonexistent', env: {}, platform: 'linux' }), 'unauthenticated');
   let fetched = 0;
-  await rejects(readClaudeUsage({ home: home(t, { expiresAt: Date.now() - 1 }), env: {}, platform: 'win32', fetch: async () => { fetched++; } }), 'unauthenticated');
-  assert.equal(fetched, 0, 'expired tokens are never sent and never refreshed here');
+  await rejects(readClaudeUsage({ home: home(t, { expiresAt: Date.now() - 1 }), env: {}, platform: 'win32', refresh: false, fetch: async () => { fetched++; } }), 'unauthenticated');
+  assert.equal(fetched, 0, 'expired tokens are never sent');
+});
+
+// --- refresh of an expired oauth record ---------------------------------------
+const creds = (h) => JSON.parse(fs.readFileSync(path.join(h, '.claude', '.credentials.json'), 'utf8'));
+function refreshFetch(now, { status = 200, token = { access_token: 'NEW-ACCESS', refresh_token: 'NEW-REFRESH', expires_in: 28800, refresh_token_expires_in: 864000, scope: 'user:profile user:inference' } } = {}) {
+  const calls = [];
+  const f = async (url, init) => {
+    calls.push({ url, init });
+    if (url === CLAUDE_TOKEN_URL) return { status, headers: new Map(), json: async () => token };
+    return { status: 200, headers: new Map(), json: async () => claudeBody(now) };
+  };
+  f.calls = calls; return f;
+}
+test('claude: expired record is refreshed, saved over the spent refresh token, and used', async (t) => {
+  const now = Date.now(), h = home(t, { expiresAt: now - 1 });
+  const doc = creds(h); doc.mcpOAuth = { keep: 'me' };
+  fs.writeFileSync(path.join(h, '.claude', '.credentials.json'), JSON.stringify(doc));
+  const f = refreshFetch(now);
+  const result = await readClaudeUsage({ home: h, env: {}, platform: 'win32', fetch: f });
+  assert.equal(result.source, 'claude-oauth-usage');
+  for (const s of ['NEW-ACCESS', 'NEW-REFRESH', 'REFRESH-SECRET']) assert(!JSON.stringify(result).includes(s), s);
+  const [post, usage] = f.calls;
+  assert.equal(post.url, CLAUDE_TOKEN_URL); assert.equal(post.init.method, 'POST'); assert.equal(post.init.redirect, 'manual');
+  assert.deepEqual(JSON.parse(post.init.body), { grant_type: 'refresh_token', refresh_token: 'REFRESH-SECRET', client_id: CLAUDE_OAUTH_CLIENT_ID, scope: 'user:profile' });
+  assert.equal(usage.init.headers.Authorization, 'Bearer NEW-ACCESS');
+  const saved = creds(h);
+  assert.deepEqual(saved.mcpOAuth, { keep: 'me' });
+  assert.equal(saved.claudeAiOauth.accessToken, 'NEW-ACCESS'); assert.equal(saved.claudeAiOauth.refreshToken, 'NEW-REFRESH');
+  assert.equal(saved.claudeAiOauth.subscriptionType, 'max'); assert.equal(saved.claudeAiOauth.rateLimitTier, 'default_claude_max_5x');
+  assert.deepEqual(saved.claudeAiOauth.scopes, ['user:profile', 'user:inference']);
+  assert(saved.claudeAiOauth.expiresAt >= now + 28800_000); assert(saved.claudeAiOauth.refreshTokenExpiresAt >= now + 864000_000);
+  assert(!fs.existsSync(path.join(h, '.claude', '.oauth_refresh.lock')), 'primary lock released');
+  assert(!fs.existsSync(`${fs.realpathSync(path.join(h, '.claude'))}.lock`), 'legacy lock released');
+});
+test('claude: refresh respects claude code locks; only stale ones are reclaimed', async (t) => {
+  const now = Date.now(), h = home(t, { expiresAt: now - 1 }), lock = path.join(h, '.claude', '.oauth_refresh.lock');
+  fs.mkdirSync(lock);
+  const f = refreshFetch(now);
+  await rejects(readClaudeUsage({ home: h, env: {}, platform: 'win32', fetch: f }), 'unauthenticated');
+  assert.equal(f.calls.length, 0); assert(fs.existsSync(lock), 'a live holder keeps its lock');
+  const legacy = `${fs.realpathSync(path.join(h, '.claude'))}.lock`;
+  fs.rmdirSync(lock); fs.mkdirSync(legacy);
+  await rejects(readClaudeUsage({ home: h, env: {}, platform: 'win32', fetch: f }), 'unauthenticated');
+  assert.equal(f.calls.length, 0); assert(!fs.existsSync(lock), 'primary released when legacy is held'); assert(fs.existsSync(legacy));
+  const old = new Date(now - 120_000); fs.utimesSync(legacy, old, old);
+  await readClaudeUsage({ home: h, env: {}, platform: 'win32', fetch: f });
+  assert.equal(f.calls[0].url, CLAUDE_TOKEN_URL); assert(!fs.existsSync(legacy));
+});
+test('claude: a refresh that landed while waiting for the lock is reused, not repeated', async (t) => {
+  const now = Date.now(), h = home(t);
+  const reads = [{ accessToken: 'OLD', refreshToken: 'R1', expiresAt: now - 1 }, { accessToken: 'THEIRS', refreshToken: 'R2', expiresAt: now + 3600_000 }];
+  let i = 0;
+  const keychain = async () => JSON.stringify({ claudeAiOauth: reads[Math.min(i++, 1)] });
+  const f = refreshFetch(now);
+  const r = await refreshClaudeCredentials({ home: h, env: {}, platform: 'darwin', keychain, keychainWrite: async () => assert.fail('no write'), fetch: f });
+  assert.equal(r.token, 'THEIRS'); assert.equal(r.refreshed, false); assert.equal(f.calls.length, 0);
+});
+test('claude: keychain refresh writes through security with the right service and account; CAS skips a moved record', async (t) => {
+  const now = Date.now(), h = home(t);
+  let stored = { claudeAiOauth: { accessToken: 'OLD', refreshToken: 'R1', expiresAt: now - 1, scopes: ['user:inference'], clientId: 'custom-client' }, other: 1 };
+  const writes = [];
+  const keychain = async (service) => { assert.equal(service, CLAUDE_KEYCHAIN_SERVICE); return JSON.stringify(stored); };
+  const keychainWrite = async (service, json, { account }) => { writes.push({ service, account }); stored = JSON.parse(json); };
+  const f = refreshFetch(now, { token: { access_token: 'A2', expires_in: 3600 } });
+  const r = await refreshClaudeCredentials({ home: h, env: { USER: 'owner' }, platform: 'darwin', keychain, keychainWrite, fetch: f });
+  assert.equal(r.token, 'A2'); assert.equal(r.origin, 'keychain');
+  assert.deepEqual(writes, [{ service: CLAUDE_KEYCHAIN_SERVICE, account: 'owner' }]);
+  assert.equal(JSON.parse(f.calls[0].init.body).client_id, 'custom-client');
+  assert.equal(stored.other, 1); assert.equal(stored.claudeAiOauth.refreshToken, 'R1', 'no rotation keeps the posted refresh token'); assert.equal(stored.claudeAiOauth.accessToken, 'A2');
+  // Another writer replaced the record between our post and our write: theirs stands.
+  stored = { claudeAiOauth: { accessToken: 'OLD', refreshToken: 'R1', expiresAt: now - 1 } };
+  let reads = 0;
+  const moving = async () => (++reads >= 3 ? JSON.stringify({ claudeAiOauth: { accessToken: 'X', refreshToken: 'R9', expiresAt: now + 1 } }) : JSON.stringify(stored));
+  writes.length = 0;
+  await refreshClaudeCredentials({ home: h, env: { USER: 'owner' }, platform: 'darwin', keychain: moving, keychainWrite, fetch: refreshFetch(now) });
+  assert.equal(writes.length, 0);
+});
+test('claude: rejected or broken refreshes leave the stored record untouched', async (t) => {
+  const now = Date.now(), h = home(t, { expiresAt: now - 1 }), before = fs.readFileSync(path.join(h, '.claude', '.credentials.json'), 'utf8');
+  await rejects(readClaudeUsage({ home: h, env: {}, platform: 'win32', fetch: refreshFetch(now, { status: 400, token: { error: 'invalid_grant' } }) }), 'unauthenticated');
+  await assert.rejects(readClaudeUsage({ home: h, env: {}, platform: 'win32', fetch: refreshFetch(now, { status: 429 }) }), (e) => e.code === 'rate_limited');
+  await rejects(readClaudeUsage({ home: h, env: {}, platform: 'win32', fetch: refreshFetch(now, { token: { nope: true } }) }), 'invalid_response');
+  await rejects(readClaudeUsage({ home: h, env: {}, platform: 'win32', fetch: async () => { throw Object.assign(Error('t'), { name: 'TimeoutError' }); } }), 'timeout');
+  assert.equal(fs.readFileSync(path.join(h, '.claude', '.credentials.json'), 'utf8'), before);
+  assert(!fs.existsSync(path.join(h, '.claude', '.oauth_refresh.lock')));
+  await rejects(refreshClaudeCredentials({ home: h, env: { CLAUDE_CODE_OAUTH_TOKEN: 'x' }, platform: 'win32' }), 'unauthenticated');
+});
+test('claude: keychain service carries claude code config dir suffix only for CLAUDE_CONFIG_DIR', () => {
+  assert.equal(claudeKeychainService({}, '/Users/x'), CLAUDE_KEYCHAIN_SERVICE);
+  assert.match(claudeKeychainService({ CLAUDE_CONFIG_DIR: '/tmp/cfg' }, '/Users/x'), /^Claude Code-credentials-[0-9a-f]{8}$/);
 });
 test('claude: http and transport failures map to bounded error codes', async (t) => {
   const h = home(t), base = { home: h, env: {}, platform: 'win32' };

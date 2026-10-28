@@ -8,13 +8,14 @@ import { PassThrough } from 'node:stream';
 import readline from 'node:readline';
 import { attachProxy } from '../lib/codex-proxy.mjs';
 import { buildInfo } from '../lib/build-info.mjs';
-import { readLaunch, writeLaunch, claudeLaunchArgs, claudeJobId, desktopLaunch, launchEnvironment, launchPolicy } from '../lib/session-launch.mjs';
+import { readLaunch, writeLaunch, isCorrupt, claudeLaunchArgs, claudeJobId, desktopLaunch, launchEnvironment, launchPolicy } from '../lib/session-launch.mjs';
 
 import { codexThreadParams, verifyNativePermissions } from '../lib/launch-permissions.mjs';
-import { claudeJobs, matchClaudeJob, claudeJobExited, stopClaudeJob, terminateChild } from '../lib/native-runtime.mjs';
+import { claudeJobs, matchClaudeJob, claudeJobExited, stopClaudeJob, terminateChild, claudeJobLogs, classifyClaudeLog } from '../lib/native-runtime.mjs';
 
 const file = process.argv[2], busDir = path.dirname(path.dirname(file));
 let record = readLaunch(file), child, bridge, stopping = false, stopRequested = false, launcherDone = false, checking = false, finalizing = false, finishPromise, nativeMonitor, cleanupRpc = () => {};
+if (!record || isCorrupt(record)) { process.stderr.write(`${record ? record.error : 'missing receipt'}; refusing to launch from ${file}\n`); process.exit(2); }
 if (fs.existsSync(file + '.stop')) { writeLaunch(file, { ...record, state: 'stopped' }); process.exit(0); }
 // Fail closed before spawning if the initial ownership receipt cannot persist.
 record = { ...record, workerPid: process.pid, workerVersion: 2, workerBuild: buildInfo, updatedAt: Date.now() };
@@ -109,6 +110,24 @@ try {
       if (code !== 0 && !nativeJobId) { update({ state: /workspace.*not trusted/i.test(output) ? 'failed' : 'uncertain', error: output.trim().slice(-2000) || `launcher exited ${code}; inspect for an unregistered native job` }); clearInterval(control); return; }
       if (!nativeJobId) { update({ state: 'uncertain', error: 'launcher returned without a recognized native job id' }); clearInterval(control); return; }
       update({ state: 'awaiting_registration', note: 'native background job created; waiting for native inventory' });
+      // A job the native inventory calls "working" that never registers a session may be crash-looping.
+      // After 30s unregistered, sample its live terminal output every 15s; crash lines mark the launch
+      // `crashing` (it keeps its slot until stopped; nothing is killed or restarted automatically).
+      const env = (k, d) => Number.isFinite(Number(process.env[k])) && process.env[k] !== '' && process.env[k] !== undefined ? Number(process.env[k]) : d;
+      const LOG_AFTER = env('AGENTBUS_UNREGISTERED_LOG_AFTER_MS', 30000), LOG_EVERY = env('AGENTBUS_UNREGISTERED_LOG_EVERY_MS', 15000), STALL_AFTER = env('AGENTBUS_UNREGISTERED_STALL_MS', 90000);
+      let awaitingSince = null, lastLogAt = 0;
+      const watchUnregistered = async () => {
+        const now = Date.now(); awaitingSince ??= now;
+        if (now - awaitingSince < LOG_AFTER || (lastLogAt && now - lastLogAt < LOG_EVERY)) return;
+        lastLogAt = now;
+        const logs = await claudeJobLogs(record.binary, request.cwd, record.nativeJobId);
+        if (!logs.ok) return;
+        const c = classifyClaudeLog(logs.text), waitedSec = Math.round((now - awaitingSince) / 1000);
+        if (c.crashing) update({ crash: { evidence: c.evidence, respawns: c.respawns, lastExitCode: c.lastExitCode, observedAt: now }, nativeLogTail: logs.text,
+          error: `native worker is crashing before its session registers (${c.lastExitCode !== null ? `exit ${c.lastExitCode}, ` : ''}${c.respawns} respawn line(s)): ${c.evidence.at(-1) || ''}`.slice(0, 600),
+          note: `inspect \`claude logs ${record.nativeJobId}\`; stop this launch to release its slot` });
+        else if (now - awaitingSince >= STALL_AFTER) update({ stall: { waitedSec }, nativeLogTail: logs.text, note: `native job has not registered a session for ${waitedSec}s; inspect \`claude logs ${record.nativeJobId}\`` });
+      };
       const inspect = async () => {
         if (checking || stopping) return; checking = true;
         try {
@@ -121,10 +140,12 @@ try {
             update({ state: 'stopped', nativeState: job?.state || 'removed', note: 'native inventory confirmed job exit', error: null });
             clearInterval(monitor); clearInterval(control); return;
           }
-          update({ state: job.pid ? 'running' : 'awaiting_registration', nativeSeen: !job.ambiguous, nativeState: job.state || 'unknown', ...(typeof job.cwd === 'string' ? { nativeCwd: job.cwd } : {}), ...(job.sessionId ? { agentId: 'claude:' + job.sessionId } : {}), note: job.pid ? 'native job live; transport readiness is reported separately' : 'native job blocked or awaiting process; reservation retained' });
+          if (job.pid) { awaitingSince = null; if (record.crash || record.stall) update({ crash: null, stall: null, nativeLogTail: null, error: null }); }
+          else if (!job.ambiguous) await watchUnregistered();
+          update({ state: job.pid ? 'running' : record.crash ? 'crashing' : 'awaiting_registration', nativeSeen: !job.ambiguous, nativeState: job.state || 'unknown', ...(typeof job.cwd === 'string' ? { nativeCwd: job.cwd } : {}), ...(job.sessionId ? { agentId: 'claude:' + job.sessionId } : {}), note: job.pid ? 'native job live; transport readiness is reported separately' : (record.crash || record.stall) ? record.note : 'native job blocked or awaiting process; reservation retained' });
         } finally { checking = false; }
       };
-      const monitor = nativeMonitor = setInterval(() => void inspect(), 5000);
+      const monitor = nativeMonitor = setInterval(() => void inspect(), env('AGENTBUS_NATIVE_POLL_MS', 5000));
       await inspect();
     });
   } else {

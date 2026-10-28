@@ -50,6 +50,8 @@ while ($null -ne [Console]::In.ReadLine()) {
       foregroundCoversMonitor = [AgentbusPresence]::ForegroundCoversMonitor()
       foreground = $fgName
       foregroundPid = $fgPid
+      # wsl2 vm up? (nat mode leaves no lan fingerprint; ~6ms in-process, no wsl.exe spawn)
+      wsl = ([System.Diagnostics.Process]::GetProcessesByName('vmmemWSL').Length -gt 0)
       observedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     } | ConvertTo-Json -Compress))
   } catch { [Console]::Out.WriteLine((@{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress)) }

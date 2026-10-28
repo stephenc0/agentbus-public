@@ -64,6 +64,7 @@ test('discovery rejects wrong protocol, own host, public addresses and malformed
   assert.equal(discoveryPeer({ ...s, txt: { ...s.txt, v: '2' } }, self), null);
   assert.equal(discoveryPeer({ ...s, addresses: ['8.8.8.8', '127.0.0.1'] }, self), null);
   assert.equal(discoveryPeer({ ...s, txt: { v: '1', id: '../escape' } }, self), null);
+  assert.equal(discoveryPeer({ ...s, name: `agentbus-${other}` }, self).name, null, 'the unauthenticated mdns service name is never a display name');
   assert.equal(privateIPv4('172.32.0.1'), false);
   assert(parseRemoteId(remoteId(other, aid())));
   assert.equal(parseRemoteId('lan:host/../../anything'), null);
@@ -129,11 +130,16 @@ test('authenticated storage inventory maps paths to hosts and withdraws lost vol
 });
 
 test('peers carry sanitized host presence over the authenticated channel', async (t) => {
-  const raw = { a: { userIdleSec: 3, fullscreen: false, gpuUtil: 2 }, b: { userIdleSec: 0, fullscreen: true, fullscreenApp: 'Game\u0007.exe', shellState: 'busy', fullscreenBasis: 'foreground-monitor', foreground: 'Game', foregroundPid: 123, foregroundCoversMonitor: true, probeObservedAt: Date.now(), gpuUtil: 95 } };
-  const p = await pair(t, { presenceFor: (name) => presenceTracker({ sampler: { sample: async () => raw[name], close() {} }, dir: fs.mkdtempSync(path.join(os.tmpdir(), `ab-pres-${name}-`)) }) });
+  const raw = { a: { userIdleSec: 3, fullscreen: false, gpuUtil: 2 }, b: { userIdleSec: 0, fullscreen: true, fullscreenApp: 'Game\u0007.exe', shellState: 'busy', fullscreenBasis: 'foreground-monitor', foreground: 'Game', foregroundPid: 123, foregroundCoversMonitor: true, probeObservedAt: Date.now(), gpuUtil: 95, wsl: true } };
+  const job = { id: '2b8e6f14-9c3d-4a7e-b5f2-0d1c6a9e4b83', name: 'colabfold\u0007 demo', runtime: 'claude-code', source: 'b29c1927-9f56-4f94-845f-4b53a2fa231b', sourceName: 'laptop', since: 1, claims: ['gpu', 'NOPE'] };
+  const p = await pair(t, { presenceFor: (name) => presenceTracker({ sampler: { sample: async () => raw[name], close() {} }, dir: fs.mkdtempSync(path.join(os.tmpdir(), `ab-pres-${name}-`)), jobs: () => name === 'b' ? [job] : [] }) });
   await Promise.all([p.A.refresh(), p.B.refresh()]); // second round: each side now has a sample to serve
   const status = await p.local('a', { op: 'status' });
   assert.equal(status.presence.gpu, 'shared');
+  assert.equal(status.presence.compute, false); assert.deepEqual(status.presence.jobs, []);
+  assert.equal(status.peers[0].presence.compute, true); assert.equal(status.peers[0].presence.wsl, true);
+  assert.deepEqual(status.peers[0].presence.jobs, [{ id: job.id, name: 'colabfold  demo', runtime: 'claude-code', source: job.source, sourceName: 'laptop', sourceAgent: null, agentId: null, since: 1, claims: ['gpu'] }]);
+  assert.match(status.peers[0].presence.reasons.join(';'), /compute job: colabfold  demo \[gpu\] for laptop/);
   assert.equal(status.peers[0].presence.gpu, 'avoid');
   assert.equal(status.peers[0].presence.user, 'busy');
   assert.equal(status.peers[0].presence.fullscreenApp, 'Game .exe');
@@ -270,6 +276,35 @@ test('authenticated host history survives discovery loss without creating routes
   assert.equal((await p.local('a', { op: 'status' })).knownHosts.length, 1, 'discovery alone cannot create history');
   assert.equal((await p.local('a', { op: 'forget-host', hostId: p.cb.hostId })).ok, true);
   assert.equal((await p.local('a', { op: 'status' })).knownHosts.length, 0);
+});
+
+test('a peer rediscovered after its daemon restarts keeps its authenticated name, never its id or mdns service name', async (t) => {
+  const p = await pair(t);
+  const named = async () => (await p.local('a', { op: 'status' })).peers.map((x) => [x.hostId, x.name]);
+  assert.deepEqual(await named(), [[p.cb.hostId, 'b']]);
+  // b's daemon comes back on a new port and re-announces itself as `agentbus-<hostId>`; nothing has authenticated it yet
+  p.A.discover({ ...p.service(p.cb, p.B), name: `agentbus-${p.cb.hostId}`, port: p.B.port + 1 });
+  const status = await p.local('a', { op: 'status' });
+  assert.equal(status.peers[0].port, p.B.port + 1, 'the new address is taken');
+  assert.equal(status.peers[0].name, 'b', 'name survives re-discovery (this was the phantom `agentbus-<uuid>` host on the dashboard)');
+  // a host never authenticated before has no name to keep: a short id placeholder, not the mdns string
+  const stranger = crypto.randomUUID();
+  p.A.discover({ txt: { v: '1', id: stranger }, name: `agentbus-${stranger}`, port: 5555, addresses: ['127.0.0.1'] });
+  assert.equal((await p.local('a', { op: 'status' })).peers.find((x) => x.hostId === stranger).name, stranger.slice(0, 8));
+});
+
+test('peers share their known hosts (identity, last-authenticated time and link kind only) over authenticated inventory', async (t) => {
+  const p = await pair(t);
+  await Promise.all([p.A.refresh(), p.B.refresh()]); // second round: each side has now authenticated the other
+  const status = await p.local('a', { op: 'status' });
+  assert(status.build.features.includes('shared-known-hosts-v1'));
+  const shared = status.peers[0].knownHosts;
+  assert.equal(shared.length, 1);
+  assert.deepEqual(Object.keys(shared[0]).sort(), ['hostId', 'lastAuthenticatedAt', 'link', 'name']);
+  assert.equal(shared[0].link, 'lan', 'loopback test pair classifies as lan; no address crosses');
+  assert.equal(status.knownHosts[0].link, 'lan');
+  assert.equal(shared[0].hostId, p.ca.hostId); assert.equal(shared[0].name, 'a');
+  assert.equal(status.knownHosts.length, 1, 'a peer\'s registry is never merged into ours');
 });
 
 test('account usage crosses authenticated inventory sanitized and without delaying presence', async t => {

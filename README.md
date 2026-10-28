@@ -119,9 +119,23 @@ node bin/agentbus.mjs auto                              # drop the override
 
 agents should not start a training run on the box you are gaming on. the lan daemon samples every poll (10s) and serves a verdict to the local mcp/cli and, over the authenticated psk channel only (never mdns txt), to peers:
 
-- `user`: `away` (no input for 10m, or session locked) | `present` | `busy` (fullscreen app or marked busy) | `unknown`
-- `gpu`: `avoid` (fullscreen app, >=50% gpu util on two consecutive samples, or marked busy) | `shared` (a person is active: light work only) | `free` (away or marked available)
+- `user`: `away` (no input for 10m, or session locked) | `present` | `busy` (any fullscreen app, windows presentation mode, or marked busy) | `unknown`
+- `gpu`: `avoid` (fullscreen GAME, >=50% gpu util on two consecutive samples, marked busy, or a live compute job for a peer) | `shared` (a person is active, including fullscreen video/browser/slides: light work only) | `free` (away or marked available)
+- `fullscreenGame`: `true` | `false` | `null` (nothing fullscreen). only a fullscreen game sets `avoid` on its own. a game is exclusive d3d fullscreen (shell `d3d_fullscreen`, even if the covering process has a non-game name) or any covering foreground process NOT on the documented non-game list `NON_GAME_FULLSCREEN` in `lib/presence.mjs` (browsers: chrome, msedge, firefox, brave, opera, vivaldi, arc; players: vlc, mpv, mpc-hc/be, potplayer, wmplayer, movies & tv, media player, kodi, plex, spotify; office/docs: powerpnt, winword, excel, onenote, acrobat, sumatrapdf; teams, zoom, mstsc, explorer). unknown or unnamed fullscreen apps count as games so an unseen game still protects itself. windows presentation mode is busy + shared. reasons say which path fired: `fullscreen game: <app> (...)`, `fullscreen non-game app <app> (... gpu stays shared)`, `windows presentation mode (... not a game, gpu stays shared)`. a heavy non-game fullscreen (video edit, browser game) still hits the sustained gpu rule.
 - `reasons` and `guidance` strings meant for an agent to read verbatim.
+- `compute`: `true` while this host runs a spawned job that declared a claim (see below); `jobs`: `[{ id, name, runtime, source, sourceName, sourceAgent, agentId, since, claims }]`, the live claimed launches (`source` is the requesting host id or `local`; `sourceName` from the authenticated host history). a visual indicator (orb lights, menu bar) can key off `peers[].presence.compute`.
+- `unclaimed`: same shape as `jobs` (with `claims: []`), the live launches spawned here WITHOUT a claim. informational only: never sets `compute`, never touches `gpu` or `user`. a dashboard counting peer work should add `jobs` and `unclaimed`; anything deciding whether to defer keys off `gpu`/`compute`.
+- `wsl` (windows only): `true` while the wsl2 vm is up (`vmmemWSL` exists; in nat mode the vm has no lan fingerprint). `null` elsewhere.
+
+### compute claims
+
+a spawn request may carry `claims: ['gpu']` (`spawn_session`, or `agentbus sessions spawn --claim gpu`). the **destination** daemon owns the claim: while that launch's native job is working (claude-code: receipt `nativeState=working` and refreshed within 60s or the supervisor alive; codex: supervisor alive and a turn in progress) the host publishes `compute=true`, the job in `jobs`, and `gpu=avoid` with reason `compute job: <name> [gpu] for <source host>`, the same tier as `agentbus busy`. when the job finishes, is stopped, or its receipt goes stale the claim drops by itself: no runner cooperation, no ttl. a manual `agentbus busy|available` override still wins. claims are frozen in the launch receipt and its hash; a retry with different claims is rejected like any other changed request. desktop handoffs cannot claim (nothing supervises them). claim names are short lowercase tokens; `gpu` and `cpu` are the conventions. jobs are derived from the launch receipts already on disk on the daemon's existing tick: no extra poller or child process.
+
+claims stay strict: only a claim makes a launch a compute job. a claude-code job whose session sits on a long background shell (registry status `shell`, e.g. a colabfold run) still counts: `claude agents --json` keeps such a job `working` for the whole wait and only reports `done` after the shell ends and the turn closes. a launch spawned without a claim is published under `unclaimed` and nothing more: agentbus does not guess that a busy session is the gpu consumer, so it never marks a host busy on that inference. a session nobody spawned through agentbus has no receipt and appears in neither list; its load shows up only through the sustained gpu rule (`gpu at N%` -> `avoid`) or a manual `agentbus busy`. so: spawn compute work with `claims`.
+
+launch receipt hygiene: a receipt whose supervisor is dead and whose native job has been `done|blocked|stopped|failed|removed` (claude-code) or whose codex runtime is gone for over 2h no longer counts toward `maxSessions` or toward `jobs`; `session_launch_status` reports it as `stale`. `agentbus sessions reconcile` lists them on the local host and `--close <id>` marks one stopped (termination is unverified by definition; the file stays for inspection). never offered over the lan.
+
+slot usage: launch capabilities (`session_launch_status` without an id, `agentbus sessions capabilities`, and every peer's `launching` in `lan status`) carry `activeSessions` next to `maxSessions`: the receipts holding a slot under the same predicate the spawn-time limit uses (not stopped/failed, not quarantined, not stale; corrupt receipts written since boot count). it is computed read-only: no native inventory, no receipt rewrite, no quarantine rename. the limit check additionally reconciles dead-worker claude-code receipts against `claude agents` before counting, so `activeSessions` can briefly run ahead of it by receipts whose native job already exited but that no launch or status call has reconciled yet. a corrupt receipt from before the current boot is not counted (a launch would move it aside first). peers publish `null` until they run a build with this field.
 
 probes: windows keeps one hidden powershell child for `GetLastInputInfo`, `SHQueryUserNotificationState` (`d3d_fullscreen`, `presentation`, `busy`) and "foreground window covers its monitor and is not merely maximized", which catches borderless games that never set d3d state; gpu via `nvidia-smi`. macos uses `ioreg` `HIDIdleTime` and IOAccelerator `Device Utilization %` (no fullscreen detection; use `agentbus busy`). linux: `nvidia-smi` only.
 
@@ -176,7 +190,15 @@ node bin/agentbus.mjs uninstall-codex-bridge
 
 macos only. on windows the installer refuses: the desktop app (verified against 26.1002) treats any `CODEX_CLI_PATH` as "not the app-contained core", skips contained-core startup and strips `CODEX_WINDOWS_REGISTERED_CORE` / `CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY` from the app-server env. codex.exe uses those to reach `CodexSandboxService`, so a bridge would silently change sandboxing. windows codex gets hook delivery: mail lands on the next prompt or tool call, an idle thread isn't woken.
 
-the macos login agent runs `launch-codex`, which supplies `CODEX_CLI_PATH` directly using `open --env` and verifies a ready bridge parented by the desktop app. it also sets the launchctl default for later ordinary launches. this replaces the environment-only login job, whose ordering relative to app restore was not guaranteed. after installation, the new login job takes effect at next login; a controlled recovery can reload it after the app is safely closed. an already running unbridged app is never killed automatically: the launcher fails with an actionable error after 30 seconds. check `~/.agentbus/desktop-launch.log` if another login/restore path launched the app first. use `launch-codex` for explicit launches after quitting the app normally.
+the macos login agent runs `launch-codex`, which supplies `CODEX_CLI_PATH` directly using `open --env` and verifies a ready bridge parented by the desktop app. it also sets the launchctl default for later ordinary launches. this replaces the environment-only login job, whose ordering relative to app restore was not guaranteed. after installation, the new login job takes effect at next login; a controlled recovery can reload it after the app is safely closed. an already running unbridged app is never killed automatically. interactive `launch-codex` fails with an actionable error after 30 seconds; use it for explicit launches after quitting the app normally.
+
+the login run (`launch-codex --at-login`) races whatever else opens the app (its own "open at login" item, macos window restore, a click): the app can appear just before or just after `open` and then lacks the bridge env. so at login it:
+- exits 0 without opening or focusing anything when the app is already bridged (`action: already-bridged`), so the job's launchd exit code reads healthy.
+- launches the app bridged when nothing is running; if another launch won the race, re-checks instead of failing.
+- when an unbridged app is up, waits up to 15s for its bridge (an app opened after the `launchctl setenv` inherits it), then quits it normally (cmd-q, no signals) and relaunches bridged only if it runs no codex turn and started after this job did or within 240s of it. at most 3 relaunches within 180s.
+- an older or busy unbridged app is the user's: left running, exit 1 with the same refusal. every decision is a timestamped `login:` line in `~/.agentbus/desktop-launch.log`.
+
+`install-codex-bridge` reloads an already loaded login job (launchd otherwise keeps the definition it read at login, so an upgraded plist would not apply until the next login) and its at-login pass runs once immediately; a first install loads at next login. verify without logging out: `launchctl kickstart gui/$(id -u)/local.agentbus.codex-bridge` with the app bridged must log `already bridged; nothing to do` and leave `launchctl print gui/$(id -u)/local.agentbus.codex-bridge` at `last exit code = 0`.
 
 `bridge-status` distinguishes `configured` from `liveReady`; `--thread` additionally reports `deliveryReady` and `owningBridgePid`, queried from the live app-server without resuming or starting the thread. a configured override or an unrelated ready bridge is not delivery readiness. protocol version 3 supports this ownership probe. dead-pid socket/marker registrations and their state files are cleaned on all platforms; live/reused pids and all inbox records are preserved.
 
@@ -209,6 +231,32 @@ lan mode uses bonjour/dns-sd on the local ipv4 multicast domain. `_agentbus._tcp
 - session: host id, session id, client type, status, model, and model provenance. session appearance/disappearance and status/model changes are refreshed every ten seconds.
 
 hardware/session advertisements are visible to other machines on the lan, as requested. message bodies, working directories and transcript previews are not broadcast. agent inventory and delivery use tls-psk with a random 256-bit pairing key; no plaintext fallback. the shared key makes participating hosts one trust group, not mutually isolated identities. mdns claims alone never authorize a message or sms operation.
+
+### host cost (pick a host by fit and price)
+
+every host may advertise what an hour of its gpu costs, set by its owner in `~/.agentbus/lan/config.json`:
+
+```json
+{ "gpu_cost_per_hour": 0, "billing": "owned" }
+{ "gpu_cost_per_hour": 2.89, "billing": "runpod secure cloud on-demand" }
+```
+
+or `agentbus lan cost --cost-per-hour 0 --billing owned` (`--clear` removes it). `gpu_cost_per_hour` is usd per hour, a
+non-negative number. `billing` is a short label of up to 48 characters. owned hardware says `0` and `owned`. a host without the
+field is **unknown**: it is shown as `cost unknown` and never read as free. the running daemon re-reads the price every poll,
+so no restart is needed. an invalid value makes `lan serve` refuse to start. the price rides in the mdns txt record
+(`gpu_cost`, `billing`), in authenticated inventory (`capabilities.gpu_cost_per_hour`, `capabilities.billing`), in
+`lan status`, and as a hardware line per host in `host_status` and `list_agents`:
+
+```
+winbox hardware: 16303MiB cuda (NVIDIA GeForce RTX 5070 Ti, sm 12.0), $0/h owned
+mac-mini hardware: 16384MiB unified metal (Apple M6), $0/h owned
+runpod-h100 hardware: 81559MiB cuda (NVIDIA H100 80GB HBM3, sm 9.0), $3.99/h runpod secure cloud on-demand
+```
+
+apple gpus report their unified memory as the machine's ram size (`16384MiB unified`), so it compares directly with a
+discrete card's vram. remember that the os and other apps share that pool. a submitter picks the free local box when the job fits, and a rented
+80 gb pod ([docs/runpod.md](docs/runpod.md)) when it does not.
 
 cpu information comes from node's os interfaces. mac gpu information comes from `system_profiler`; linux uses `nvidia-smi`, falling back to `lspci`. gpu support describes detected hardware/driver capabilities, not installed python/ml packages or measured throughput. full hardware detail is available in `lan status` and remote agents returned by `list_agents`. unavailable fields are marked unknown.
 
@@ -282,6 +330,32 @@ the storage owner's `tasks/<uuid>/{in,out}`. it never mirrors the share and does
 uploads and downloads resume and are sha256 verified on both ends. the workflow for jobs is in
 [docs/remote-jobs.md](docs/remote-jobs.md).
 
+### on-demand cloud pods
+
+a provisioner host (`~/.agentbus/cloud/`) offers rented gpu pods to the whole group. peers call `cloud_status`,
+`cloud_up` (a `max_hours` or `max_usd` hard cap is required) and `cloud_down`, or the `agentbus cloud` cli. the
+provisioner holds the provider and tailscale keys and enforces the cap and a 15 minute idle rule. before termination it
+purges fetched task folders from the pod's volume. a live pod is an ordinary peer that every host dials directly. see
+[docs/cloud.md](docs/cloud.md).
+
+### userspace tailscale (containers without /dev/net/tun)
+
+cloud containers such as runpod pods have no tun device, so `tailscaled --tun=userspace-networking` runs there and the
+node has no 100.x interface to bind. `lan join --userspace-tailscale` is the opt-in for that case:
+
+- **bind 127.0.0.1.** tailscaled's netstack redials inbound tailnet tcp for the node's own tailscale ip to `127.0.0.1` on
+  the same port. this is `acceptTCP` in `wgengine/netstack/netstack.go`. the kb doesn't document it, so loopback is enough and nothing listens on the pod's other interfaces.
+- **dial out through tailscaled's socks5 proxy.** that is `--socks5-server`, default `127.0.0.1:1055`, set with `--socks5`.
+  every peer connection, blob transfer and doctor probe uses it. loopback peers stay direct.
+- **advertise the tailscale ip.** `tailscale ip -4` is read at join, or passed with `--advertise-address`. it is sent with each
+  inventory request, and the owner dials that address back instead of the tcp source. only a 100.64/10 address is accepted.
+- **`--ephemeral`** marks a rented host. peers never write it to host history, so a terminated pod does not
+  leave presence coverage partial. a silent ephemeral peer is dropped after a minute, other learned peers after ten.
+
+config fields: `"userspaceTailscale": true`, `"socks5"`, `"advertiseAddress"`, `"ephemeral"`. a host without them behaves
+exactly as before. `lan doctor` checks `tailscale ip -4` and the socks5 listener instead of a tailscale interface.
+`lan forget-host` now also removes a dead learned peer from the live table, not only from history.
+
 other commands: `lan peer list|add|remove` (static peers, picked up without a restart), `lan doctor`
 (reachability, authentication, reach back, a 4 MiB blob round trip), `lan init --peer ... --no-mdns`.
 
@@ -322,7 +396,7 @@ references: [bonjour-service](https://github.com/onlxltd/bonjour-service), [node
   bridges/<pid>-<nonce>.state.json          loaded threads + active turns that bridge observed
   bridge-config.json                        real codex executable + previous launcher override
   codex-bridge                              launcher shim using an absolute node path
-  presence.json                             latest daemon presence sample + verdict
+  presence.json                             latest daemon presence sample + verdict (raw.jobs: live claimed launches at that tick)
   presence-override.json                    manual busy/available override (agentbus busy|available|auto)
 ```
 
@@ -341,8 +415,10 @@ agentbus sessions configure --root /absolute/project/root --root /absolute/share
 agentbus sessions capabilities
 agentbus sessions spawn --runtime codex --cwd /absolute/project --name worker --id <request-uuid> 'the task'
 agentbus sessions spawn --runtime claude-code --host winbox --from codex:<your-thread-id> --cwd 'D:\AgentbusTasks' --id <request-uuid> 'the task'
+agentbus sessions spawn --runtime claude-code --host winbox --from codex:<your-thread-id> --cwd 'D:\AgentbusTasks' --claim gpu --id <request-uuid> 'the gpu job'   # winbox publishes compute=true / gpu=avoid while it works
 agentbus sessions status <request-uuid> --host winbox --from codex:<your-thread-id>
 agentbus sessions stop <request-uuid> --host winbox --from codex:<your-thread-id>
+agentbus sessions reconcile [--close <request-uuid>]   # local host owner: list/close stale receipts that hold no slot
 ```
 
 configuration is local to each destination, stored in `~/.agentbus/launch-config.json`. launching is disabled until configured. `--remote` permits authenticated peers with a live sending session to request launches; omitting it permits local launches only. `--codex` and `--claude` accept absolute native executable paths if discovery fails. on windows use `codex.exe` from the npm platform package, not `codex.cmd` or a powershell shim. the receiving user must already have native runtime credentials. no credentials are transferred by spawn.
@@ -353,7 +429,19 @@ configuration is local to each destination, stored in `~/.agentbus/launch-config
 
 `cwd` is a path on the **destination** host. shared-storage IDs can identify the same volume, but its mac and windows paths differ. allowed roots are canonicalized; sibling-prefix and symlink escapes are rejected. roots limit where sessions start, not every resource they can access: runtime sandbox/permissions remain responsible for tool access. check host presence before assigning heavy work. a writable shared workspace also lets trusted peers supply project instructions/configuration; only allow roots whose contributors you trust.
 
-launch receipts are persisted before process creation. reuse the **same request UUID and unchanged parameters** after a timeout; the destination returns its existing receipt rather than spawning again. `starting`/`awaiting_registration` is not a delivery guarantee: poll for `deliveryReady: true`, then verify task completion; `routable` only means discovered. inspect reported native errors. uncertain launches consume the configured concurrency limit until inspected/stopped. receipts survive daemon restarts; active codex workers are separate processes and are not silently respawned. a stale `launches/launch.lock` after a process crash fails closed; inspect its recorded PID and receipts before removing that lock. never automatically use a new UUID to retry an uncertain launch. remote status/stop operations are scoped to the original sending host/session.
+launch receipts are persisted before process creation. reuse the **same request UUID and unchanged parameters** after a timeout; the destination returns its existing receipt rather than spawning again. `starting`/`awaiting_registration` is not a delivery guarantee: poll for `deliveryReady: true`, then verify task completion; `routable` only means discovered. inspect reported native errors. uncertain launches consume the configured concurrency limit until inspected/stopped. receipts survive daemon restarts; active codex workers are separate processes and are not silently respawned. a stale `launches/launch.lock` after a process crash fails closed; inspect its recorded PID and receipts before removing that lock. every receipt write (the initial intent and each worker update) goes to a temp file, is fsynced and renamed into place, so a crash mid-write cannot leave a half-written or zero-filled file. a receipt that is nevertheless unparseable is reported as state `corrupt` with its path for that id only. if it was last written before the current boot (ntfs zero fill after a hard reset on an older build) no worker can have survived, so the launcher moves it aside itself (`<name>.json.corrupt-<timestamp>`), releases the slot and reports where it went; one written since boot holds its session slot and is left in place: inspect the native runtime for a surviving process, then rename it aside the same way. never automatically use a new UUID to retry an uncertain launch. remote status/stop operations are scoped to the original sending host/session.
+
+#### crash-looping claude-code launches
+
+`claude agents --json` reports a background job as `working` even while its worker crash-loops before
+the session registers. it has no pid, and nothing in the inventory shows the crash. once a job has gone
+30s without registering, the supervisor samples its live terminal output (`claude logs <id>`) every 15s.
+crash lines (signals, exit 137/139, oom, respawn) put the launch in `state: crashing`, with `crash.evidence`,
+`crash.lastExitCode`, `crash.respawns`, `nativeLogTail` and an error. status then reports `ok: false`. after
+90s without registering and without crash lines, the launch gets `stall` and the log tail instead. a crashing
+launch keeps its session slot and is never killed or restarted automatically. stop it to release the slot.
+registering later clears both markers. claude's daemon serves those logs only while the job exists, so
+afterwards the evidence lives in the launch receipt.
 
 ### destination-owned codex permission profiles
 
@@ -461,6 +549,16 @@ changes the GPU scheduling verdict or overrides an explicit busy setting.
   host. live authenticated hosts cannot be retired. the registry holds at most
   256 identities; corruption, write failure, or overflow makes coverage partial
   rather than treating missing evidence as absence.
+  each entry also keeps `link`: `wan` when the host last authenticated over an overlay
+  (tailscale `100.64.0.0/10`) address, `lan` over a private one, absent when the address
+  is anything else (a hostname). the address itself is never stored or shared; a move
+  between lan and wan is saved at once rather than on the once-a-minute refresh.
+  each peer also shares its own registry (`hostId`, `name`, `lastAuthenticatedAt`, and
+  `link` when known; nothing else about any remote host) over authenticated inventory when it
+  advertises `build.features` `shared-known-hosts-v1`; `lan status` shows it as
+  `peers[].knownHosts`. it is that peer's claim, never merged into the local
+  registry or coverage. a wan joiner that peers only with the storage owner shows
+  its recent contact, and how that owner reaches it, there. older peers send no `link`. `null` means the peer runs an older build.
 - `hostCoverage`: `complete` or `partial`; `scope` is always
   `not_person_identity`. neither inactivity nor missing occupancy proves that
   a particular person is away. home observations expire on their own sensor TTL,
@@ -494,7 +592,10 @@ both hosts before calling an upgrade complete. preserve each host's working tree
 and state/config outside the release bundle; stage source, run tests, then
 restart only its LAN service. detached workers and desktop bridges continue on
 their loaded code until individually stopped or their owning app is restarted.
-never kill unrelated workers to deploy.
+never kill unrelated workers to deploy. on windows `lan stop` kills the runner
+loop and the daemon's own children by (pid, creation time), never `taskkill /t`:
+session-worker supervisors name the daemon as parent but are left running (listed
+as `spared`), so claimed jobs keep refreshing their receipts across a restart.
 
 normal `npm test` uses isolated fake native runtimes and never invokes a model.
 optional native tests remain available through `AGENTBUS_TEST_CODEX`; windows
@@ -553,9 +654,10 @@ usage plugin. provider errors never expose credentials or response bodies.
 windows presence distinguishes shell notification state from measured fullscreen:
 `QUNS_BUSY` alone is ambiguous, so it limits availability to `shared` (ask before
 heavy work), without claiming a fullscreen app. `QUNS_APP` alone is not fullscreen.
-confirmed foreground monitor coverage or exclusive D3D fullscreen still means
-`avoid`, even at 0% GPU utilization. explicit presentation mode also means `avoid`,
-but is labeled presentation rather than fullscreen. explicit user overrides and
+exclusive D3D fullscreen, or foreground monitor coverage by a process not on the
+non-game list, means `avoid` even at 0% GPU utilization. coverage by a listed
+non-game app (browser, video player, office) and explicit presentation mode mean
+`busy` + `shared`; presentation is labeled presentation rather than fullscreen. explicit user overrides and
 sustained GPU-load checks retain their existing precedence. sanitized presence
 includes `shellState`, `fullscreenBasis`, `foregroundCoversMonitor`, `foreground`,
 `foregroundPid`, and `probeObservedAt`; text output shows sample age. this is a
