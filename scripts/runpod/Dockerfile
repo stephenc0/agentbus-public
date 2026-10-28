@@ -23,11 +23,17 @@ ARG ESM_SPEC="esm==3.4.1.post1"
 ARG LOCALCOLABFOLD_REV=e2e8c4a834a3d50ebaede3bb42786707fdc8f6ec
 ARG COLABFOLD_REV=84c27d9cc500489fd9b97545d2325b9d00f251d5
 ARG PIXI_VERSION=v0.83.0
-# boltz-2: torch is unpinned upstream (torch>=2.2) and its [cuda] extra uses cuequivariance cu12 ops, so torch is pinned to
-# a cu128 build to match them.
+# boltz-2: upstream pins neither torch (torch>=2.2) nor cuequivariance (>=0.5.0). cuequivariance-ops-torch-cu12 0.11.1+ needs
+# torch>=2.11, so an unconstrained install drags torch to the newest release (2.15+cu132 in the first build). pin the set that
+# was current when boltz 2.2.1 shipped (2025-09-08): torch 2.8.0 cu128 and cuequivariance 0.6.1, through a constraints file
+# so no later resolver step can move them, and assert the result.
 ARG BOLTZ_SPEC="boltz[cuda]==2.2.1"
-ARG BOLTZ_TORCH="torch==2.8.0"
+ARG BOLTZ_TORCH_VERSION=2.8.0+cu128
+ARG BOLTZ_CUEQ_VERSION=0.6.1
 ARG BOLTZ_TORCH_INDEX=https://download.pytorch.org/whl/cu128
+# esm 3.4.1.post1 requires torch>=2.11,<2.12; pin the exact build and assert it (PyPI's 2.11.0 is cuda 13.0).
+ARG ESM_TORCH_VERSION=2.11.0
+ARG ESM_CUEQ_VERSION=0.13.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg git jq tini iproute2 procps util-linux \
@@ -45,10 +51,16 @@ RUN curl -fsSL https://tailscale.com/install.sh | sh && tailscale version
 RUN curl -fsSL https://claude.ai/install.sh | bash && /root/.local/bin/claude --version
 ENV PATH=/root/.local/bin:${PATH}
 
+# large wheels (cudnn ~700 MB) stall on slow or proxied links: retry with a long read timeout. set here, just before the
+# python layers, so changing it never invalidates the apt/node/tailscale/claude layers above.
+ENV PIP_DEFAULT_TIMEOUT=120 PIP_RETRIES=10 PIP_DISABLE_PIP_VERSION_CHECK=1
+
 # ---- esmfold2: /opt/esm (python api: /opt/esm/bin/python, or the esm-python wrapper) ----
 RUN python3.12 -m venv /opt/esm && /opt/esm/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/esm/bin/pip install --no-cache-dir "${ESM_SPEC}" "huggingface_hub[hf_transfer]" \
-    && /opt/esm/bin/python -c "import torch, esm; from esm.models.esmfold2 import EsmFold2Model; assert torch.version.cuda, 'cpu-only torch'; print('esm smoke ok: torch', torch.__version__, 'cuda', torch.version.cuda)"
+    && printf '%s\n' "torch==${ESM_TORCH_VERSION}" "cuequivariance==${ESM_CUEQ_VERSION}" "cuequivariance-torch==${ESM_CUEQ_VERSION}" "cuequivariance-ops-cu13==${ESM_CUEQ_VERSION}" "cuequivariance-ops-torch-cu13==${ESM_CUEQ_VERSION}" > /opt/esm/constraints.txt \
+    && /opt/esm/bin/pip install --no-cache-dir -c /opt/esm/constraints.txt "${ESM_SPEC}" "huggingface_hub[hf_transfer]" \
+    && /opt/esm/bin/pip check \
+    && /opt/esm/bin/python -c "import torch, esm; from esm.models.esmfold2 import EsmFold2Model; v = torch.__version__.split('+')[0]; assert v == '${ESM_TORCH_VERSION}', f'esm torch drifted to {torch.__version__}'; assert torch.version.cuda == '13.0', f'esm torch is cuda {torch.version.cuda}, expected 13.0'; print('esm smoke ok: torch', torch.__version__, 'cuda', torch.version.cuda)"
 
 # ---- colabfold: /opt/colabfold (localcolabfold via pixi; colabfold_batch on PATH via a wrapper) ----
 RUN curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=${PIXI_VERSION} PIXI_HOME=/opt/pixi PIXI_NO_PATH_UPDATE=1 bash \
@@ -72,11 +84,14 @@ RUN printf '%s\n' '#!/bin/sh' \
 
 # ---- boltz-2: /opt/boltz (boltz on PATH via a wrapper; weights in $BOLTZ_CACHE on the volume) ----
 RUN python3.12 -m venv /opt/boltz && /opt/boltz/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/boltz/bin/pip install --no-cache-dir "${BOLTZ_TORCH}" --index-url ${BOLTZ_TORCH_INDEX} \
-    && /opt/boltz/bin/pip install --no-cache-dir "${BOLTZ_SPEC}" \
+    && printf '%s\n' "torch==${BOLTZ_TORCH_VERSION}" "cuequivariance==${BOLTZ_CUEQ_VERSION}" "cuequivariance-torch==${BOLTZ_CUEQ_VERSION}" "cuequivariance-ops-cu12==${BOLTZ_CUEQ_VERSION}" "cuequivariance-ops-torch-cu12==${BOLTZ_CUEQ_VERSION}" > /opt/boltz/constraints.txt \
+    && /opt/boltz/bin/pip install --no-cache-dir -c /opt/boltz/constraints.txt --extra-index-url ${BOLTZ_TORCH_INDEX} "${BOLTZ_SPEC}" \
+    && /opt/boltz/bin/pip check \
     && printf '%s\n' '#!/bin/sh' 'export BOLTZ_CACHE="${BOLTZ_CACHE:-/workspace/cache/boltz}"' 'exec /opt/boltz/bin/boltz "$@"' > /usr/local/bin/boltz && chmod 0755 /usr/local/bin/boltz \
     && boltz predict --help >/dev/null \
-    && /opt/boltz/bin/python -c "import torch, boltz; assert torch.version.cuda, 'cpu-only torch'; print('boltz smoke ok: torch', torch.__version__, 'cuda', torch.version.cuda)"
+    && /opt/boltz/bin/python -c "import torch, boltz, cuequivariance_torch; from importlib.metadata import version as v; assert torch.__version__ == '${BOLTZ_TORCH_VERSION}', f'boltz torch drifted to {torch.__version__}'; assert torch.version.cuda == '12.8', f'boltz torch is cuda {torch.version.cuda}'; assert v('cuequivariance-ops-torch-cu12') == '${BOLTZ_CUEQ_VERSION}', 'cuequivariance drifted'; print('boltz smoke ok: torch', torch.__version__, 'cuda', torch.version.cuda, 'cuequivariance', v('cuequivariance-torch'))"
+# no inference smoke for boltz at build time: its first predict downloads the ccd/mols archive and the boltz-2 checkpoints
+# (several gb) into BOLTZ_CACHE, which belongs on the volume, not in the image. the first real job does that once.
 RUN printf '%s\n' '#!/bin/sh' 'exec /opt/esm/bin/python "$@"' > /usr/local/bin/esm-python && chmod 0755 /usr/local/bin/esm-python
 
 # agentbus: the baked bootstrap/fallback copy, cloned from the PUBLIC mirror at a pinned ref. nothing is copied from the

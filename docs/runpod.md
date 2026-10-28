@@ -64,17 +64,29 @@ none of this can be scripted from here: each step needs an account, a payment me
 
    | path | what | pinned to |
    |---|---|---|
-   | `/opt/esm` | esmfold2 (biohub `esm`, python api via `esm-python` or `/opt/esm/bin/python`) | `esm==3.4.1.post1`, torch 2.11 cuda 13 |
+   | `/opt/esm` | esmfold2 (biohub `esm`, python api via `esm-python` or `/opt/esm/bin/python`) | `esm==3.4.1.post1`, torch 2.11.0 (cuda 13.0), cuequivariance 0.13.0 |
    | `/opt/colabfold` | localcolabfold via pixi (`colabfold_batch`, `colabfold_search` on PATH) | localcolabfold `e2e8c4a8` (pixi), ColabFold **v1.6.3**, jax 0.10.1 cuda12, openmm 8.2 |
-   | `/opt/boltz` | boltz-2 (`boltz predict` on PATH) | `boltz[cuda]==2.2.1`, torch 2.8.0+cu128 |
+   | `/opt/boltz` | boltz-2 (`boltz predict` on PATH) | `boltz[cuda]==2.2.1`, torch 2.8.0+cu128 (cuda 12.8), cuequivariance 0.6.1 |
    | `/opt/agentbus` | the baked agentbus copy: bootstrap and fallback only | the commit the image was built from |
 
    - **isolated envs.** the three stacks conflict: esm wants cuda 13 torch, boltz wants cuda 12 kernels, colabfold wants
      jax and tensorflow. each has its own env, so a tool's update never breaks another.
    - **smoke tests.** each env's build step imports the stack, asserts the gpu backend is a cuda build (no gpu at build
      time) and runs the cli's `--help`.
-   - **host driver.** the wheels bring their own cuda libraries. hosts need a driver for cuda 13 (580+), which is the
-     offers' `minCuda: "13.0"`. cuda 12 builds run on it too.
+   - **pins hold.** torch and cuequivariance are pinned through pip constraints files, and the smoke steps assert the
+     final versions, so any drift fails the build. the first build showed why: with only torch preinstalled, boltz's
+     unpinned cuequivariance (0.11.1 and later need torch>=2.11) moved boltz to torch 2.15+cu132. boltz now uses the
+     set that was current at its 2.2.1 release.
+   - **host driver floor = 13.0.** each env's wheels bring their own cuda userspace, so the driver must support the
+     highest cuda among them:
+
+     | env | cuda its wheels need |
+     |---|---|
+     | esm | 13.0 (torch 2.11.0+cu130, driver 580+) |
+     | boltz | 12.8 (torch 2.8.0+cu128) |
+     | colabfold | 12.x (jax 0.10.1 cuda12 wheels, driver 525+) |
+
+     so offers use `minCuda: "13.0"`. if a pin moves to a newer cuda, raise the floor to match.
    - **no weights in the image.** colabfold params go to `/workspace/cache/colabfold` (its wrapper sets
      `XDG_CACHE_HOME`), with the jax compile cache in `/workspace/cache/jax`. boltz uses `/workspace/cache/boltz`
      (`BOLTZ_CACHE`), esm uses `/workspace/hf` (`HF_HOME`), and torch uses `/workspace/cache/torch`. each downloads
@@ -84,9 +96,13 @@ none of this can be scripted from here: each step needs an account, a payment me
      with only the host changed. winbox's wsl variables are not set: `TF_FORCE_GPU_ALLOW_GROWTH` and
      `XLA_PYTHON_CLIENT_ALLOCATOR` are wsl2 workarounds per the localcolabfold readme, and colabfold sets
      `TF_FORCE_UNIFIED_MEMORY` and `XLA_PYTHON_CLIENT_MEM_FRACTION` itself on every platform.
-   - **size: unknown until the first build.** expect it to be large: two torch builds of ~4.6 gb each, plus jax with
-     cuda12 and tensorflow. measure the pull time on a fresh machine and set the offers' `coldStartMinutes` from that.
-     no secrets are in it.
+   - **size: 29.5 gb** for the first build, which had the boltz torch drift. the pinned build should be similar or a
+     little smaller. the pull dominates cold start.
+   - **cold start: 15 minutes, provisional and unmeasured.** the estimate is a 29.5 gb pull at a few hundred mb/s, plus
+     layer extraction, plus boot (agentbus fetch and npm ci on the first pod per ref, then tailscale, join and doctor).
+     replace it with the first measured cold start (it appears in `cloud_status` progress). later pods on a machine that
+     already has the image are much faster.
+   - no secrets are in it.
 7. **template (optional).** a runpod pod template with that image, a 60 gb container disk, no exposed ports, and these
    env vars:
 

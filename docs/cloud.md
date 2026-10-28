@@ -86,10 +86,10 @@ on the provisioner, here mac-mini:
      "offers": [
        { "name": "runpod-h100", "gpu": "NVIDIA H100 80GB HBM3", "cloud": "SECURE",
          "image": "ghcr.io/<you>/agentbus-runpod:0.6.0", "volumeId": "<network volume id>",
-         "dataCenterId": "US-NE-1", "minCuda": "13.0", "coldStartMinutes": 12, "gpuMemoryMiB": 81559 },
+         "dataCenterId": "US-NE-1", "minCuda": "13.0", "coldStartMinutes": 15, "gpuMemoryMiB": 81559 },
        { "name": "runpod-rtx6000", "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition", "cloud": "SECURE",
          "image": "ghcr.io/<you>/agentbus-runpod:0.6.0", "volumeId": "<network volume id>",
-         "dataCenterId": "US-NE-1", "minCuda": "13.0", "coldStartMinutes": 12 }
+         "dataCenterId": "US-NE-1", "minCuda": "13.0", "coldStartMinutes": 15 }
      ] }
    ```
    - **two offers, one volume.** both name the same network volume in its data center. the h100 sxm has 80 gb, sm 9.0, and lists at $3.99/h secure. the rtx pro 6000 has 96 gb and sm 12.0 with native fp8, and lists at $2.49/h secure.
