@@ -2,7 +2,8 @@
 // Scan the tracked tree, the commits about to be pushed and the committer identity for secrets and owner identifiers.
 // Refuses on any finding. Meant as a pre-push hook in a checkout of a public repo:
 //
-//   printf '#!/bin/sh\nexec node scripts/leak-check.mjs --pre-push "$@"\n' > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+//   printf '#!/bin/sh\n[ "$1" = origin ] || exit 0\nexec node scripts/leak-check.mjs --pre-push "$@"\n' > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+//   (gates only the public remote, origin)
 //   node scripts/leak-check.mjs            # by hand: tree + identity
 //
 // Owner-specific identifiers belong in a deny list OUTSIDE the repo (one regex per line, # comments):
