@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { tailscaleCandidates, locateTailscale, createTailscaleRunner, tailscaleStatus, TAILSCALE_APP_CLI } from '../lib/tailscale-cli.mjs';
+import { tailscaleCandidates, locateTailscale, createTailscaleRunner, tailscaleStatus, tailscaleStatusAsync, TAILSCALE_APP_CLI } from '../lib/tailscale-cli.mjs';
 import { tailscaleIPv4 } from '../lib/lan.mjs';
 
 test('the locator knows each platform: PATH first, then the app bundle, program files, or the linux package paths', () => {
@@ -35,6 +35,21 @@ test('the runner tries every located binary until one answers, remembers it, and
   assert.equal(none.binary(), null);
   const broken = createTailscaleRunner({ exec: () => { throw Error('enoent'); }, locate: () => ['/usr/bin/tailscale'] });
   assert.equal(broken(['status', '--json']), '');
+});
+
+test('the async runner (the daemon path) falls back the same way without ever blocking, and shares the memo', async () => {
+  const calls = [];
+  const execAsync = async (bin, args) => { calls.push(bin); await new Promise((r) => setTimeout(r, 5)); if (bin === '/usr/bin/tailscale') throw Error('failed to connect to local tailscaled'); return { stdout: `${bin} ${args.join(' ')}\n` }; };
+  const run = createTailscaleRunner({ execAsync, exec: () => { throw Error('sync path must not be used'); }, locate: () => ['/usr/bin/tailscale', '/usr/local/bin/tailscale'] });
+  let settled = false; const pending = run.async(['status', '--json']).then((v) => { settled = true; return v; });
+  assert.equal(settled, false, 'returns a promise; the event loop is free');
+  assert.equal(await pending, '/usr/local/bin/tailscale status --json\n');
+  assert.equal(run.binary(), '/usr/local/bin/tailscale');
+  await run.async(['ip', '-4']);
+  assert.deepEqual(calls, ['/usr/bin/tailscale', '/usr/local/bin/tailscale', '/usr/local/bin/tailscale']);
+  assert.equal(await createTailscaleRunner({ execAsync, locate: () => [] }).async(['ip', '-4']), '');
+  assert.deepEqual(await tailscaleStatusAsync({ async: async () => '{"BackendState":"Running","Peer":{}}' }), { BackendState: 'Running', Peer: {} });
+  assert.equal(await tailscaleStatusAsync({ async: async () => '' }), null);
 });
 
 test('status parses the json the cli prints and is null for no cli, no json or a non-object', () => {
