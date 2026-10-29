@@ -54,7 +54,7 @@ COST_ARGS=()
 [ -n "${AGENTBUS_GPU_COST_PER_HOUR:-}" ] && COST_ARGS+=(--cost-per-hour "$AGENTBUS_GPU_COST_PER_HOUR")
 [ -n "${AGENTBUS_BILLING:-}" ] && COST_ARGS+=(--billing "$AGENTBUS_BILLING")
 # the token is read from AGENTBUS_JOIN_TOKEN by lan join; it never appears on a command line or in a log
-ab lan join --userspace-tailscale --ephemeral --advertise-address "$TS_IP" --socks5 "$SOCKS5" --name "$AGENTBUS_NAME" --port "$PORT" "${COST_ARGS[@]}" \
+ab lan join --host --userspace-tailscale --ephemeral --advertise-address "$TS_IP" --socks5 "$SOCKS5" --name "$AGENTBUS_NAME" --port "$PORT" "${COST_ARGS[@]}" \
   | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const r=JSON.parse(s);console.log(`[agentbus-pod] joined as ${r.name} ${r.hostId} bind ${r.bind}:${r.port}`)})'
 HOST_ID="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).hostId)' "$AGENTBUS_DIR/lan/config.json")"
 

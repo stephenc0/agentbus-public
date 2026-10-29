@@ -30,8 +30,8 @@ async function world(t, { idleMinutes = 10, relay = false } = {}) {
       created.push(body);
       if (failCreate) throw Error('runpod create pod: http 400 no capacity');
       const { key: hex, peers } = decodeJoinToken(body.env.AGENTBUS_JOIN_TOKEN);
-      const cfg = mk(body.name, { key: Buffer.from(hex, 'hex'), ephemeral: true, gpu_cost_per_hour: Number(body.env.AGENTBUS_GPU_COST_PER_HOUR), billing: body.env.AGENTBUS_BILLING });
-      fs.writeFileSync(path.join(cfg.dir, 'config.json'), JSON.stringify({ hostId: cfg.hostId, name: cfg.name, port: 0, bind: '127.0.0.1', ephemeral: true, gpu_cost_per_hour: cfg.gpu_cost_per_hour, billing: cfg.billing, peers }));
+      const cfg = mk(body.name, { role: 'host', key: Buffer.from(hex, 'hex'), ephemeral: true, gpu_cost_per_hour: Number(body.env.AGENTBUS_GPU_COST_PER_HOUR), billing: body.env.AGENTBUS_BILLING });
+      fs.writeFileSync(path.join(cfg.dir, 'config.json'), JSON.stringify({ role: 'host', hostId: cfg.hostId, name: cfg.name, port: 0, bind: '127.0.0.1', ephemeral: true, gpu_cost_per_hour: cfg.gpu_cost_per_hour, billing: cfg.billing, peers }));
       const share = path.join(root, 'volume', cfg.hostId); fs.mkdirSync(share, { recursive: true });
       registerStorage({ name: 'pod tasks', localPath: share, uri: 'smb://pod/agentbus-tasks', ownerHostId: cfg.hostId, create: true }, path.dirname(cfg.dir));
       const daemon = await startLan({ ...common, cloud: false, config: cfg, listLocal: () => [podAgent] });

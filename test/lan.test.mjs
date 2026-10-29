@@ -16,7 +16,7 @@ const agent = (name) => ({ id: aid(), kind: 'codex', clientType: 'codex', model:
 async function pair(t, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-lan-'));
   const key = crypto.randomBytes(32), a = agent('worker'), b = agent('worker'), receivedA = [], receivedB = [];
-  const config = (name) => ({ hostId: crypto.randomUUID(), name, key, dir: path.join(root, name, 'lan'), port: 0, bind: options.mdns ? '0.0.0.0' : '127.0.0.1' });
+  const config = (name) => ({ role: 'host', hostId: crypto.randomUUID(), name, key, dir: path.join(root, name, 'lan'), port: 0, bind: options.mdns ? '0.0.0.0' : '127.0.0.1' });
   const ca = config('a'), cb = config('b');
   if (options.sms) { ca.smsPrimary = ca.hostId; cb.smsPrimary = ca.hostId; }
   let liveB = [b];
@@ -150,6 +150,14 @@ test('peers carry sanitized host presence over the authenticated channel', async
   assert.equal(status.peers[0].presence.raw, undefined);
   const inventory = await p.local('a', { op: 'list' });
   assert.equal(inventory.agents[0].hostPresence.gpu, 'avoid');
+  // the peer leaves (sleep, walked off the lan): status stops reporting its last sample as current presence
+  const sampledAt = status.peers[0].presence.at;
+  await p.B.close();
+  await p.A.refresh();
+  const after = await p.local('a', { op: 'status' });
+  assert.ok(after.peers[0].error, 'peer is unreachable');
+  assert.equal(after.peers[0].presence, null, 'no stale presence replayed');
+  assert.equal(after.peers[0].lastPresenceAt, sampledAt, 'only the time of the last sample remains');
 });
 
 test('wrong pairing keys fail before listing or sending', async (t) => {
@@ -293,14 +301,15 @@ test('a peer rediscovered after its daemon restarts keeps its authenticated name
   assert.equal((await p.local('a', { op: 'status' })).peers.find((x) => x.hostId === stranger).name, stranger.slice(0, 8));
 });
 
-test('peers share their known hosts (identity, last-authenticated time and link kind only) over authenticated inventory', async (t) => {
+test('peers share their known hosts (identity, last-authenticated time, link kind and role only) over authenticated inventory', async (t) => {
   const p = await pair(t);
   await Promise.all([p.A.refresh(), p.B.refresh()]); // second round: each side has now authenticated the other
   const status = await p.local('a', { op: 'status' });
   assert(status.build.features.includes('shared-known-hosts-v1'));
   const shared = status.peers[0].knownHosts;
   assert.equal(shared.length, 1);
-  assert.deepEqual(Object.keys(shared[0]).sort(), ['hostId', 'lastAuthenticatedAt', 'link', 'name']);
+  assert.deepEqual(Object.keys(shared[0]).sort(), ['hostId', 'lastAuthenticatedAt', 'link', 'name', 'role']);
+  assert.equal(shared[0].role, 'host', 'the role a host declared travels with it');
   assert.equal(shared[0].link, 'lan', 'loopback test pair classifies as lan; no address crosses');
   assert.equal(status.knownHosts[0].link, 'lan');
   assert.equal(shared[0].hostId, p.ca.hostId); assert.equal(shared[0].name, 'a');

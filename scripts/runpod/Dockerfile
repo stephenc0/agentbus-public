@@ -13,27 +13,10 @@
 ARG CUDA_IMAGE=nvidia/cuda:12.9.1-runtime-ubuntu24.04
 FROM ${CUDA_IMAGE}
 
+# tool versions are declared next to the layer that uses them: a changed ARG invalidates every RUN after its
+# declaration, so a pin bump rebuilds only that tool (and the layers below it), never apt/node/tailscale/claude.
 ARG DEBIAN_FRONTEND=noninteractive
 ARG NODE_MAJOR=24
-# esmfold2 (biohub esm). esm 3.4.1.post1 has extras fused/fold-cp/cueq12/cueq13, no [gpu]; on linux x86_64 its base install
-# pulls torch 2.11 (cuda 13 wheels) and cuequivariance-ops-torch-cu13.
-ARG ESM_SPEC="esm==3.4.1.post1"
-# colabfold: localcolabfold's pixi install (YoshitakaMo/localcolabfold main, "use jax 0.10.1"), the same route as winbox's
-# ~/localcolabfold. its pyproject tracks ColabFold main unpinned; we pin ColabFold to the v1.6.3 tag (winbox runs 1.6.3).
-ARG LOCALCOLABFOLD_REV=e2e8c4a834a3d50ebaede3bb42786707fdc8f6ec
-ARG COLABFOLD_REV=84c27d9cc500489fd9b97545d2325b9d00f251d5
-ARG PIXI_VERSION=v0.83.0
-# boltz-2: upstream pins neither torch (torch>=2.2) nor cuequivariance (>=0.5.0). cuequivariance-ops-torch-cu12 0.11.1+ needs
-# torch>=2.11, so an unconstrained install drags torch to the newest release (2.15+cu132 in the first build). pin the set that
-# was current when boltz 2.2.1 shipped (2025-09-08): torch 2.8.0 cu128 and cuequivariance 0.6.1, through a constraints file
-# so no later resolver step can move them, and assert the result.
-ARG BOLTZ_SPEC="boltz[cuda]==2.2.1"
-ARG BOLTZ_TORCH_VERSION=2.8.0+cu128
-ARG BOLTZ_CUEQ_VERSION=0.6.1
-ARG BOLTZ_TORCH_INDEX=https://download.pytorch.org/whl/cu128
-# esm 3.4.1.post1 requires torch>=2.11,<2.12; pin the exact build and assert it (PyPI's 2.11.0 is cuda 13.0).
-ARG ESM_TORCH_VERSION=2.11.0
-ARG ESM_CUEQ_VERSION=0.13.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg git jq tini iproute2 procps util-linux \
@@ -55,6 +38,12 @@ ENV PATH=/root/.local/bin:${PATH}
 # python layers, so changing it never invalidates the apt/node/tailscale/claude layers above.
 ENV PIP_DEFAULT_TIMEOUT=120 PIP_RETRIES=10 PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# esmfold2 (biohub esm). esm 3.4.1.post1 has extras fused/fold-cp/cueq12/cueq13, no [gpu]; on linux x86_64 its base install
+# pulls torch 2.11 (cuda 13 wheels) and cuequivariance-ops-torch-cu13.
+ARG ESM_SPEC="esm==3.4.1.post1"
+# esm 3.4.1.post1 requires torch>=2.11,<2.12; pin the exact build and assert it (PyPI's 2.11.0 is cuda 13.0).
+ARG ESM_TORCH_VERSION=2.11.0
+ARG ESM_CUEQ_VERSION=0.13.0
 # ---- esmfold2: /opt/esm (python api: /opt/esm/bin/python, or the esm-python wrapper) ----
 RUN python3.12 -m venv /opt/esm && /opt/esm/bin/pip install --no-cache-dir --upgrade pip \
     && printf '%s\n' "torch==${ESM_TORCH_VERSION}" "cuequivariance==${ESM_CUEQ_VERSION}" "cuequivariance-torch==${ESM_CUEQ_VERSION}" "cuequivariance-ops-cu13==${ESM_CUEQ_VERSION}" "cuequivariance-ops-torch-cu13==${ESM_CUEQ_VERSION}" > /opt/esm/constraints.txt \
@@ -62,6 +51,11 @@ RUN python3.12 -m venv /opt/esm && /opt/esm/bin/pip install --no-cache-dir --upg
     && /opt/esm/bin/pip check \
     && /opt/esm/bin/python -c "import torch, esm; from esm.models.esmfold2 import EsmFold2Model; v = torch.__version__.split('+')[0]; assert v == '${ESM_TORCH_VERSION}', f'esm torch drifted to {torch.__version__}'; assert torch.version.cuda == '13.0', f'esm torch is cuda {torch.version.cuda}, expected 13.0'; print('esm smoke ok: torch', torch.__version__, 'cuda', torch.version.cuda)"
 
+# colabfold: localcolabfold's pixi install (YoshitakaMo/localcolabfold main, "use jax 0.10.1"), the same route as winbox's
+# ~/localcolabfold. its pyproject tracks ColabFold main unpinned; we pin ColabFold to the v1.6.3 tag (winbox runs 1.6.3).
+ARG LOCALCOLABFOLD_REV=e2e8c4a834a3d50ebaede3bb42786707fdc8f6ec
+ARG COLABFOLD_REV=84c27d9cc500489fd9b97545d2325b9d00f251d5
+ARG PIXI_VERSION=v0.83.0
 # ---- colabfold: /opt/colabfold (localcolabfold via pixi; colabfold_batch on PATH via a wrapper) ----
 RUN curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=${PIXI_VERSION} PIXI_HOME=/opt/pixi PIXI_NO_PATH_UPDATE=1 bash \
     && git clone https://github.com/YoshitakaMo/localcolabfold.git /opt/colabfold/localcolabfold \
@@ -82,6 +76,14 @@ RUN printf '%s\n' '#!/bin/sh' \
     && colabfold_batch --help >/dev/null \
     && /opt/colabfold/localcolabfold/.pixi/envs/default/bin/python -c "import importlib.util as u, colabfold, jax, openmm; assert u.find_spec('jax_cuda12_plugin'), 'jax cuda12 plugin missing'; print('colabfold smoke ok: jax', jax.__version__)"
 
+# boltz-2: upstream pins neither torch (torch>=2.2) nor cuequivariance (>=0.5.0). cuequivariance-ops-torch-cu12 0.11.1+ needs
+# torch>=2.11, so an unconstrained install drags torch to the newest release (2.15+cu132 in the first build). pin the set that
+# was current when boltz 2.2.1 shipped (2025-09-08): torch 2.8.0 cu128 and cuequivariance 0.6.1, through a constraints file
+# so no later resolver step can move them, and assert the result.
+ARG BOLTZ_SPEC="boltz[cuda]==2.2.1"
+ARG BOLTZ_TORCH_VERSION=2.8.0+cu128
+ARG BOLTZ_CUEQ_VERSION=0.6.1
+ARG BOLTZ_TORCH_INDEX=https://download.pytorch.org/whl/cu128
 # ---- boltz-2: /opt/boltz (boltz on PATH via a wrapper; weights in $BOLTZ_CACHE on the volume) ----
 RUN python3.12 -m venv /opt/boltz && /opt/boltz/bin/pip install --no-cache-dir --upgrade pip \
     && printf '%s\n' "torch==${BOLTZ_TORCH_VERSION}" "cuequivariance==${BOLTZ_CUEQ_VERSION}" "cuequivariance-torch==${BOLTZ_CUEQ_VERSION}" "cuequivariance-ops-cu12==${BOLTZ_CUEQ_VERSION}" "cuequivariance-ops-torch-cu12==${BOLTZ_CUEQ_VERSION}" > /opt/boltz/constraints.txt \

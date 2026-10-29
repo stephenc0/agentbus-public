@@ -39,6 +39,8 @@ test('host cost comes only from config: owned hardware says $0/h, absent stays u
   const owned = { ...hostCapabilities({ system: linux, run: () => 'NVIDIA GeForce RTX 5070 Ti, 16303, 12.0, 580.1' }), gpu_cost_per_hour: 0, billing: 'owned' };
   assert.equal(formatHardware(owned), '16303MiB cuda (NVIDIA GeForce RTX 5070 Ti, sm 12.0), $0/h owned');
   assert.equal(formatHardware(hostCapabilities({ system: linux, run: () => '' })), 'no gpu detected (unavailable), cost unknown');
+  // what peers actually receive is sanitized: missing fields become 'unknown' and must not turn an nvidia card into metal
+  assert.equal(formatHardware(sanitizeCapabilities(owned)), '16303MiB cuda (NVIDIA GeForce RTX 5070 Ti, sm 12.0), $0/h owned');
   const txt = hostAdvertisement({ hostId: 'h', name: 'runpod-h100' }, sanitizeCapabilities(pod), 0);
   assert.equal(txt.gpu_memory, '81559MiB'); assert.equal(txt.gpu_cost, '$2.89/h'); assert.equal(txt.billing, 'runpod secure cloud on-demand');
   assert.equal(hostAdvertisement({ hostId: 'h', name: 'n' }, sanitizeCapabilities(hostCapabilities({ system: linux, run: () => '' })), 0).gpu_cost, 'unknown');

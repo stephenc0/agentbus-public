@@ -232,6 +232,26 @@ lan mode uses bonjour/dns-sd on the local ipv4 multicast domain. `_agentbus._tcp
 
 hardware/session advertisements are visible to other machines on the lan, as requested. message bodies, working directories and transcript previews are not broadcast. agent inventory and delivery use tls-psk with a random 256-bit pairing key; no plaintext fallback. the shared key makes participating hosts one trust group, not mutually isolated identities. mdns claims alone never authorize a message or sms operation.
 
+### roles: hosts and clients
+
+every machine is a **client** unless it declares itself a **host**, locally. no other machine decides its role.
+
+- **client** (the default) only submits work: messages, blob transfers, `spawn_session` on hosts, cloud pods. its
+  daemon:
+  - never starts the presence or usage samplers
+  - shares no presence (host activity, home sensors, gpu load, foreground app) and no account usage
+  - accepts no session launches
+  - doesn't broadcast its sessions' status over mdns
+  its sessions stay reachable, so replies work.
+- **host** shares presence and usage, accepts launches per its launch policy (`sessions configure`), and counts
+  toward presence coverage. set it with `agentbus lan role host` and restart the daemon, or join with
+  `lan join --host`. `lan invite --host` makes an invite that says `AGENTBUS_ROLE=host`. cloud pods join as hosts.
+
+every inventory answer carries the role. a peer that doesn't say `host` is a client, including builds older than this
+feature, so an old peer's presence and usage are dropped. host history records which machines are hosts. only hosts
+count toward presence coverage, so a client leaving never makes `any host active` unknown. `agentbus lan role` prints
+this machine's role.
+
 ### host cost (pick a host by fit and price)
 
 every host may advertise what an hour of its gpu costs, set by its owner in `~/.agentbus/lan/config.json`:

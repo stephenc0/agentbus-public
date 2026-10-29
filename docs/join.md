@@ -61,6 +61,11 @@ run `git pull` instead. if it's anything else, clone into `~/agentbus-public` an
 node bin/agentbus.mjs lan join '<AGENTBUS_JOIN_TOKEN>' --name '<AGENTBUS_NAME>' --port <AGENTBUS_PORT or 47800>
 ```
 
+this machine joins as a **client**: it submits work, and it shares no presence (host activity, home sensors, gpu load or
+the foreground app) and no account usage. it accepts no session launches, and it doesn't broadcast its sessions' status
+on the lan. its sessions can still message peers and get replies. only if the invite has `AGENTBUS_ROLE=host` (a machine
+meant to run jobs for others), add `--host`.
+
 you can also set the environment variables `AGENTBUS_JOIN_TOKEN` and `AGENTBUS_NAME` and run
 `node bin/agentbus.mjs lan join`. this writes owner only config under `~/.agentbus/lan`, binds only
 to this machine's tailscale address, disables lan multicast, and adds the peer. it doesn't print the key.

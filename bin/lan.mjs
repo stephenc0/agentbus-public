@@ -27,18 +27,18 @@ export async function runLan(args) {
   } else if (command === 'join') {
     const { join } = await import('../lib/wan.mjs');
     const name = option('--name') || process.env.AGENTBUS_NAME || undefined, port = option('--port') || process.env.AGENTBUS_PORT || undefined, bind = option('--bind');
-    const userspace = has('--userspace-tailscale'), socks5 = option('--socks5'), advertiseAddress = option('--advertise-address'), ephemeral = has('--ephemeral'), cost = costArgs();
+    const asHost = has('--host') || process.env.AGENTBUS_ROLE === 'host', userspace = has('--userspace-tailscale'), socks5 = option('--socks5'), advertiseAddress = option('--advertise-address'), ephemeral = has('--ephemeral'), cost = costArgs();
     const token = args.shift() || process.env.AGENTBUS_JOIN_TOKEN;
-    if (!token || args.length) throw Error("usage: agentbus lan join '<agentbus-join-v1:...>' [--name name] [--port 47800] [--bind 100.x.y.z | --userspace-tailscale [--socks5 127.0.0.1:1055] [--advertise-address 100.x.y.z] [--ephemeral]] [--cost-per-hour 2.89 --billing 'label']  (or env AGENTBUS_JOIN_TOKEN, AGENTBUS_NAME, AGENTBUS_PORT, AGENTBUS_GPU_COST_PER_HOUR, AGENTBUS_BILLING)");
+    if (!token || args.length) throw Error("usage: agentbus lan join '<agentbus-join-v1:...>' [--name name] [--port 47800] [--bind 100.x.y.z | --userspace-tailscale [--socks5 127.0.0.1:1055] [--advertise-address 100.x.y.z] [--ephemeral]] [--cost-per-hour 2.89 --billing 'label'] [--host]  (or env AGENTBUS_JOIN_TOKEN, AGENTBUS_NAME, AGENTBUS_PORT, AGENTBUS_GPU_COST_PER_HOUR, AGENTBUS_BILLING, AGENTBUS_ROLE=host). without --host this machine joins as a client");
     if (!userspace && (socks5 || advertiseAddress || ephemeral)) throw Error('--socks5, --advertise-address and --ephemeral need --userspace-tailscale');
-    const result = await join({ token, name, bind, cost, ...(userspace ? { userspace: { socks5, advertiseAddress, ephemeral } } : {}), ...(port ? { port: Number(port) } : {}) });
+    const result = await join({ token, name, bind, cost, role: asHost ? 'host' : undefined, ...(userspace ? { userspace: { socks5, advertiseAddress, ephemeral } } : {}), ...(port ? { port: Number(port) } : {}) });
     console.log(JSON.stringify({ ...result, keyFile: undefined, next: 'agentbus lan install, then agentbus lan doctor' }, null, 2));
   } else if (command === 'invite') {
     const { buildInvite } = await import('../lib/wan.mjs');
-    const peerSpecs = many('--peer'), name = option('--name'), repo = option('--repo'), port = option('--port'), tokenOnly = has('--token-only'), tailscaleAuthKey = option('--tailscale-authkey') ?? (process.env.TS_AUTHKEY || undefined);
-    if (!repo && !tokenOnly) throw Error('usage: agentbus lan invite --repo URL --peer NAME=100.x.y.z[:PORT] [--peer ...] [--name joiner-name] [--port joiner-port] [--tailscale-authkey tskey-auth-... | env TS_AUTHKEY] [--token-only]');
+    const peerSpecs = many('--peer'), name = option('--name'), repo = option('--repo'), port = option('--port'), tokenOnly = has('--token-only'), asHost = has('--host'), tailscaleAuthKey = option('--tailscale-authkey') ?? (process.env.TS_AUTHKEY || undefined);
+    if (!repo && !tokenOnly) throw Error('usage: agentbus lan invite --repo URL --peer NAME=100.x.y.z[:PORT] [--peer ...] [--name joiner-name] [--port joiner-port] [--tailscale-authkey tskey-auth-... | env TS_AUTHKEY] [--host] [--token-only]');
     if (args.length) throw Error(`unknown arguments: ${args.join(' ')}`);
-    const invite = await buildInvite({ peerSpecs, name, repo: repo || '<repo>', tailscaleAuthKey, ...(port ? { port: Number(port) } : {}) });
+    const invite = await buildInvite({ peerSpecs, name, repo: repo || '<repo>', tailscaleAuthKey, host: asHost, ...(port ? { port: Number(port) } : {}) });
     console.log(tokenOnly ? invite.token : invite.text);
   } else if (command === 'peer') {
     const sub = args.shift();
@@ -54,6 +54,14 @@ export async function runLan(args) {
       const hostId = args.shift(); if (!UUID.test(hostId || '') || args.length) throw Error('usage: agentbus lan peer remove HOST_UUID');
       console.log(JSON.stringify(updateLanConfig(undefined, (c) => ({ ...c, peers: (c.peers || []).filter((p) => p.hostId !== hostId) })).peers || [], null, 2));
     } else throw Error('usage: agentbus lan peer list | add --id HOST_UUID --address ADDR --port PORT [--name n] | remove HOST_UUID');
+  } else if (command === 'role') {
+    // this machine's own role, decided here and nowhere else. client (the default): submits work only, shares no presence
+    // or account usage, accepts no launches. host: shares presence and usage, accepts launches per its launch policy.
+    const role = args.shift();
+    if (!role && !args.length) { console.log(JSON.stringify({ role: loadLan().role === 'host' ? 'host' : 'client' }, null, 2)); return; }
+    if (!['host', 'client'].includes(role) || args.length) throw Error('usage: agentbus lan role [host|client]');
+    const next = updateLanConfig(undefined, (c) => { const out = { ...c }; if (role === 'host') out.role = 'host'; else delete out.role; return out; });
+    console.log(JSON.stringify({ role: next.role === 'host' ? 'host' : 'client', restart: 'run agentbus lan stop, then agentbus lan install: the daemon reads its role at start' }, null, 2));
   } else if (command === 'cost') {
     // the price this host advertises next to its gpu memory. owned hardware: --cost-per-hour 0 --billing owned. --clear: unknown.
     const clear = has('--clear'), cost = costArgs();
@@ -78,10 +86,11 @@ export async function runLan(args) {
     const config = loadLan();
     const { presenceTracker } = await import('../lib/presence.mjs');
     const { createUsageTracker } = await import('../lib/usage.mjs');
-    const daemon = await startLan({ config, mdns: config.mdns !== false, usage: createUsageTracker({ dir: process.env.AGENTBUS_DIR }), presence: presenceTracker({ dir: process.env.AGENTBUS_DIR }), listLocal: listAgents, deliverLocal: (target, from, message) => target.kind === 'claude' ? deliverToClaude(target, from, message) : deliverToCodex(target, from, message) });
+    const daemon = await startLan({ config, mdns: config.mdns !== false, // a client (the default) never starts the presence or usage samplers at all
+      usage: config.role === 'host' ? createUsageTracker({ dir: process.env.AGENTBUS_DIR }) : null, presence: config.role === 'host' ? presenceTracker({ dir: process.env.AGENTBUS_DIR }) : null, listLocal: listAgents, deliverLocal: (target, from, message) => target.kind === 'claude' ? deliverToClaude(target, from, message) : deliverToCodex(target, from, message) });
     console.log(JSON.stringify({ hostId: config.hostId, name: config.name, port: daemon.port, service: '_agentbus._tcp.local', socket: daemon.socketPath }));
     let stopping = false;
     const stop = async () => { if (stopping) return; stopping = true; await daemon.close(); };
     process.on('SIGINT', stop); process.on('SIGTERM', stop);
-  } else throw Error('usage: agentbus lan init [--name name] [--key-file file] [--port port] [--bind IPv4] [--sms-primary self|host-id] [--mdns-interface adapter|IPv4] [--peer HOST_UUID@ADDR:PORT[=name]] [--no-mdns] | lan join TOKEN [--userspace-tailscale] | lan cost --cost-per-hour N --billing label|--clear | lan invite --repo URL --peer NAME=ADDR[:PORT] | lan peer list|add|remove | lan doctor | lan serve | lan status | lan forget-host <uuid> | lan install | lan stop');
+  } else throw Error('usage: agentbus lan init [--name name] [--key-file file] [--port port] [--bind IPv4] [--sms-primary self|host-id] [--mdns-interface adapter|IPv4] [--peer HOST_UUID@ADDR:PORT[=name]] [--no-mdns] | lan join TOKEN [--userspace-tailscale] [--host] | lan role [host|client] | lan cost --cost-per-hour N --billing label|--clear | lan invite --repo URL --peer NAME=ADDR[:PORT] | lan peer list|add|remove | lan doctor | lan serve | lan status | lan forget-host <uuid> | lan install | lan stop');
 }

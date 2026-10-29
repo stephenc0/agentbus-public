@@ -96,9 +96,10 @@ none of this can be scripted from here: each step needs an account, a payment me
      with only the host changed. winbox's wsl variables are not set: `TF_FORCE_GPU_ALLOW_GROWTH` and
      `XLA_PYTHON_CLIENT_ALLOCATOR` are wsl2 workarounds per the localcolabfold readme, and colabfold sets
      `TF_FORCE_UNIFIED_MEMORY` and `XLA_PYTHON_CLIENT_MEM_FRACTION` itself on every platform.
-   - **size: 29.5 gb** for the first build, which had the boltz torch drift. the pinned build should be similar or a
-     little smaller. the pull dominates cold start.
-   - **cold start: 15 minutes, provisional and unmeasured.** the estimate is a 29.5 gb pull at a few hundred mb/s, plus
+   - **size: 28.2 gb**, measured on the pinned build (agentbus-public 21d4e71). the smoke steps assert esm torch
+     2.11.0+cu130 (cuda 13.0), boltz torch 2.8.0+cu128 (cuda 12.8) with cuequivariance 0.6.1, and colabfold jax 0.10.1,
+     and pip check is clean in both venvs. the pull dominates cold start.
+   - **cold start: 15 minutes, provisional and unmeasured.** the estimate is a 28.2 gb pull at a few hundred mb/s, plus
      layer extraction, plus boot (agentbus fetch and npm ci on the first pod per ref, then tailscale, join and doctor).
      replace it with the first measured cold start (it appears in `cloud_status` progress). later pods on a machine that
      already has the image are much faster.
