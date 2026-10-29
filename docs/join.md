@@ -50,10 +50,9 @@ open a new shell afterwards so PATH updates.
 
 ## 3. get the code
 
-clone https://github.com/stephenc0/agentbus-public into `~/agentbus` (windows:
-`%USERPROFILE%\agentbus`). if that folder already exists and its `git remote get-url origin` is this repo,
-run `git pull` instead. if it's anything else, clone into `~/agentbus-public` and use that. then run
-`npm ci` inside it.
+clone the repo the invite names into `~/agentbus` (windows: `%USERPROFILE%\agentbus`). if that
+folder already exists and its `git remote get-url origin` is that repo, run `git pull` instead. if it's
+anything else, clone into a new folder such as `~/agentbus-peer` and use that. then run `npm ci` inside it.
 
 ## 4. join the group
 
@@ -122,8 +121,8 @@ remotely over tailscale. keep its identity: never delete `~/.agentbus` or run `l
    - macos: the `ProgramArguments` in `~/Library/LaunchAgents/local.agentbus.lan.plist`
    - windows: `%USERPROFILE%\.agentbus\lan\lan-serve.cmd`
    - or: `claude mcp get agentbus`
-2. if that checkout's `git remote get-url origin` is https://github.com/stephenc0/agentbus-public, run
-   `git pull && npm ci` there and use it. otherwise clone the public repo into a new folder (step 3
+2. if that checkout's `git remote get-url origin` is the repo the invite names, run
+   `git pull && npm ci` there and use it. otherwise clone that repo into a new folder (step 3
    above) and use that one from now on. don't modify the old checkout.
 3. from the checkout you're using:
    ```sh

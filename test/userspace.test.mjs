@@ -117,9 +117,9 @@ test('a userspace-tailscale pod joins over socks5, the owner dials it back at it
 
 test('lan join --userspace-tailscale writes a loopback bind, socks5, advertised tailscale ip and cost; the default join is unchanged', async (t) => {
   const root = tmp(t), owner = path.join(root, 'owner');
-  initLan({ busDir: owner, name: 'winbox', port: 47800 });
+  initLan({ busDir: owner, name: 'gpubox', port: 47800 });
   const oc = loadLan(owner);
-  const token = encodeJoinToken({ key: oc.key.toString('hex'), peers: [{ hostId: oc.hostId, name: 'winbox', address: '100.90.0.4', port: 47800 }] });
+  const token = encodeJoinToken({ key: oc.key.toString('hex'), peers: [{ hostId: oc.hostId, name: 'gpubox', address: '100.90.0.4', port: 47800 }] });
   const pod = path.join(root, 'pod');
   await assert.rejects(join({ busDir: pod, token, name: 'runpod-h100', userspace: { tailscaleIp: () => [] } }), /tailscale ip -4/);
   await assert.rejects(join({ busDir: pod, token, name: 'runpod-h100', bind: '100.70.0.9', userspace: { tailscaleIp: () => ['100.101.0.2'] } }), /exclusive/);

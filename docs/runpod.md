@@ -8,8 +8,8 @@ hosts and replaces none of them. it advertises its gpu memory and its hourly pri
 `host_status`:
 
 ```
-winbox hardware: 16303MiB cuda (NVIDIA GeForce RTX 5070 Ti, sm 12.0), $0/h owned
-mac-mini hardware: 16384MiB unified metal (Apple M6), $0/h owned
+gpubox hardware: 16303MiB cuda (NVIDIA GeForce RTX 5070 Ti, sm 12.0), $0/h owned
+studio hardware: 16384MiB unified metal (Apple M6), $0/h owned
 runpod-h100 hardware: 81559MiB cuda (NVIDIA H100 80GB HBM3, sm 9.0), $3.99/h runpod secure cloud on-demand
 ```
 
@@ -49,15 +49,15 @@ none of this can be scripted from here: each step needs an account, a payment me
    `biohub/ESMFold2` repo is gated for your account). then a template can reference `{{ RUNPOD_SECRET_ts_authkey }}`
    rather than taking the value through the api. this step is optional: `pod.mjs` can instead pass the values from your
    local env at create time.
-6. **image.** first publish the agentbus release to the public mirror and push it. then build from that commit with
-   **no build context**: the dockerfile goes on stdin. the baked agentbus copy is cloned from the public mirror inside
-   the build, so nothing from your checkout, private or not, enters the image. push it to a registry runpod can pull.
+6. **image.** first push the agentbus commit you want pods to run. then build from that commit with **no build
+   context**: the dockerfile goes on stdin. the baked agentbus copy is cloned over https inside the build (the upstream
+   repo, or your fork via `--build-arg AGENTBUS_REPO=https://...`), so nothing from your local checkout enters the image. push it to a registry runpod can pull.
    a public ghcr image is fine because it holds no secrets. for a private registry, add registry credentials in runpod.
    ```sh
-   docker buildx build --platform linux/amd64 --build-arg AGENTBUS_REF=<public mirror commit, 40 hex> \
+   docker buildx build --platform linux/amd64 --build-arg AGENTBUS_REF=<commit, 40 hex> \
      -t ghcr.io/<you>/agentbus-runpod:0.6.0 --push - < scripts/runpod/Dockerfile
    ```
-   the build refuses a missing or floating ref, and any `AGENTBUS_REPO` other than the public mirror. use the same
+   the build refuses a missing or floating ref, and a non-https `AGENTBUS_REPO` (pods hold no git credential). use the same
    commit as the provisioner's `agentbusRef`, so the baked fallback and the volume copy match.
    **the image is the base layer only.** rebuild it when cuda, a folding stack, claude code or tailscale changes, never
    for an agentbus update. agentbus runs from the network volume at the release the provisioner pins (see below).
@@ -91,12 +91,12 @@ none of this can be scripted from here: each step needs an account, a payment me
      `XDG_CACHE_HOME`), with the jax compile cache in `/workspace/cache/jax`. boltz uses `/workspace/cache/boltz`
      (`BOLTZ_CACHE`), esm uses `/workspace/hf` (`HF_HOME`), and torch uses `/workspace/cache/torch`. each downloads
      once, on its first job.
-   - **colabfold like winbox.** `colabfold_batch` takes the same flags as winbox's `~/localcolabfold` install
-     (`--templates --amber --use-gpu-relax`, `alphafold2_ptm` and `alphafold2_multimer_v3`), so a winbox job runs
-     with only the host changed. winbox's wsl variables are not set: `TF_FORCE_GPU_ALLOW_GROWTH` and
+   - **colabfold like a local install.** `colabfold_batch` takes the same flags as a `~/localcolabfold` install
+     (`--templates --amber --use-gpu-relax`, `alphafold2_ptm` and `alphafold2_multimer_v3`), so a job written for a
+     local gpu host runs with only the host changed. wsl-only variables are not set: `TF_FORCE_GPU_ALLOW_GROWTH` and
      `XLA_PYTHON_CLIENT_ALLOCATOR` are wsl2 workarounds per the localcolabfold readme, and colabfold sets
      `TF_FORCE_UNIFIED_MEMORY` and `XLA_PYTHON_CLIENT_MEM_FRACTION` itself on every platform.
-   - **size: 28.2 gb**, measured on the pinned build (agentbus-public 21d4e71). the smoke steps assert esm torch
+   - **size: 28.2 gb**, measured on the pinned build (agentbus 0.6.0). the smoke steps assert esm torch
      2.11.0+cu130 (cuda 13.0), boltz torch 2.8.0+cu128 (cuda 12.8) with cuequivariance 0.6.1, and colabfold jax 0.10.1,
      and pip check is clean in both venvs. the pull dominates cold start.
    - **cold start: 15 minutes, provisional and unmeasured.** the estimate is a 28.2 gb pull at a few hundred mb/s, plus
@@ -116,8 +116,8 @@ none of this can be scripted from here: each step needs an account, a payment me
    `pod.mjs` adds `AGENTBUS_NAME`, `AGENTBUS_JOIN_TOKEN`, `AGENTBUS_GPU_COST_PER_HOUR` and `AGENTBUS_BILLING` per pod.
    a template's env is merged per key, so values set at create time win.
 8. **a dial target with a fixed port.** the pod dials the hosts in its join token. the host running `pod.mjs up` must be
-   one of them and needs a fixed port. winbox listens on 47800. mac-mini uses an os-assigned port (`"port": 0`), so run
-   `up` from winbox, or give the mac `"port": 47800` and restart its daemon first. `--peer name=100.x.y.z:port` adds more hosts.
+   one of them and needs a fixed port (e.g. `"port": 47800` in its lan config; the default `"port": 0` is os-assigned,
+   so set one and restart the daemon first). `--peer name=100.x.y.z:port` adds more hosts.
 
 ## start, check, stop
 
@@ -175,7 +175,7 @@ on a fresh volume, both may download, so start one first.
 
 **msa source.** both colabfold and boltz can query the public colabfold mmseqs2 server (`api.colabfold.com`):
 `colabfold_batch`'s default msa mode does, and so does boltz's `--use_msa_server`. that sends the query sequences to a
-third party. it is how winbox runs today and is acceptable for this group. the other options, chosen per job and not by
+third party. decide whether that is acceptable for your data. the other options, chosen per job and not by
 agentbus:
 - **precomputed a3m.** upload `.a3m` files to `in/`: colabfold_batch accepts a3m input, and boltz takes `msa: <path>`.
   existing colabfold msas can be reused this way.
@@ -194,7 +194,7 @@ flock /workspace/envs/.<tool>.lock sh -c 'test -f /workspace/envs/<tool>/.ready 
 ## what start.sh does on the pod
 
 the image's command is [scripts/runpod/boot.sh](../scripts/runpod/boot.sh):
-- it fetches agentbus from the public mirror at `AGENTBUS_REF` into `/workspace/agentbus/<ref>`. the ref is a 40-hex
+- it fetches agentbus over https (`AGENTBUS_REPO`, default upstream) at `AGENTBUS_REF` into `/workspace/agentbus/<ref>`. the ref is a 40-hex
   commit or a v-tag, and branches are refused.
 - it runs `npm ci --omit=dev` once per ref, under a lock so pods sharing the volume don't race, and later pods reuse it.
 - it then runs that copy's start.sh. pods hold no github credential, and follow published releases, the same code

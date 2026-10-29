@@ -1,5 +1,20 @@
 # agentbus
 
+discovery, messaging, remote session launches and job file transfer between claude code and codex sessions: on one
+machine, across a lan, across tailscale-connected machines (yours or other people's), and onto rented gpu pods that join
+as temporary peers. one node mcp server, one cli, an optional daemon per host. macos, windows and linux.
+
+**pick your path:**
+
+- **got an invite to someone's group?** paste it into claude code on your machine; it follows [docs/join.md](docs/join.md).
+- **running your own group?** [docs/self-host.md](docs/self-host.md) walks through it layer by layer: one machine, a lan
+  group, remote peers over tailscale ([invites](docs/self-host.md#3-remote-peers-over-tailscale)), and on-demand runpod gpu
+  pods ([docs/cloud.md](docs/cloud.md), [docs/runpod.md](docs/runpod.md)).
+- **submitting jobs to a peer:** [docs/remote-jobs.md](docs/remote-jobs.md).
+
+the rest of this file is the reference: how delivery works per runtime, presence, roles, storage, launching and their
+caveats.
+
 ## authenticated claude inbox relay
 
 windows relay discovery uses a bounded asynchronous DACL check, never a synchronous PowerShell process per agent. advertised readiness requires owner-only proof less than 15 seconds old and an unchanged regular registration file; cold, stale, failed or changed proof is unavailable until revalidated. dead registry owners are excluded before native checks. every actual delivery forces a fresh ACL check even when discovery is warm, because DACL-only edits need not change file timestamps. the check uses the same strict SID/SDDL rules, not an ACL relaxation.
@@ -35,14 +50,14 @@ Use a dedicated task directory, not an entire home directory or drive.
 On the storage owner, register the existing shared directory (Windows example):
 
 ```sh
-node bin/agentbus.mjs storage add --name tasks --path 'D:\AgentbusTasks' --uri smb://winbox/agentbus-tasks --create
+node bin/agentbus.mjs storage add --name tasks --path 'D:\AgentbusTasks' --uri smb://gpubox/agentbus-tasks --create
 ```
 
 `--create` writes `.agentbus-storage.json` containing a random storage UUID and the
 owner host UUID. On each client, mount the share first, then register its path:
 
 ```sh
-node bin/agentbus.mjs storage add --name tasks --path /Users/you/Shared/agentbus-tasks --uri smb://winbox/agentbus-tasks --owner OWNER_HOST_UUID --id STORAGE_UUID
+node bin/agentbus.mjs storage add --name tasks --path /Users/you/Shared/agentbus-tasks --uri smb://gpubox/agentbus-tasks --owner OWNER_HOST_UUID --id STORAGE_UUID
 node bin/agentbus.mjs storage list --json
 ```
 
@@ -59,7 +74,7 @@ local filesystem permission checks; stale samples expire after 30 seconds.
 Free/total bytes are reported from the mounted filesystem. `rw` is configured
 access plus permission checks, not a guarantee that every server-side ACL allows
 a write, a space reservation or a distributed file lock. Verify a small write and
-read on both hosts before starting a task. Use `tasks/<task-id>/` directories,
+read on every participating host before starting a task. Use `tasks/<task-id>/` directories,
 coordinate writers explicitly, and publish finished outputs with atomic renames.
 Keep live databases and concurrently modified git working trees on local storage.
 
@@ -141,11 +156,11 @@ probes: windows keeps one hidden powershell child for `GetLastInputInfo`, `SHQue
 
 `list_agents` shows a `this host:` line from the daemon snapshot plus a `presence:` line per remote row. `host_status` falls back to a one-shot probe when the daemon isn't running. overrides live in `~/.agentbus/presence-override.json` and apply on the next read, not the next sample. this is advisory: nothing stops an agent that never asks. the `host_status` tool description tells agents to call it before gpu-heavy or long cpu-heavy work.
 
-## install (already done on this box)
+## install
 
 ```
-claude mcp add --scope user agentbus -- /opt/homebrew/bin/node /path/to/agentbus/server.mjs
-codex  mcp add agentbus -- /opt/homebrew/bin/node /path/to/agentbus/server.mjs
+claude mcp add --scope user agentbus -- /absolute/path/to/node /path/to/agentbus/server.mjs
+codex  mcp add agentbus -- /absolute/path/to/node /path/to/agentbus/server.mjs
 # ~/.codex/hooks.json wires hooks/codex-hook.mjs on SessionStart/UserPromptSubmit/PostToolUse/Stop/SessionEnd
 ```
 
@@ -153,7 +168,7 @@ codex  mcp add agentbus -- /opt/homebrew/bin/node /path/to/agentbus/server.mjs
 
 manual steps codex insists on:
 1. restart the codex desktop app so it loads the new mcp server.
-2. review and trust the exact agentbus hooks in `/hooks` for fallback delivery. the six current definitions on this box were reviewed and marked trusted during bridge integration. changed definitions need fresh review.
+2. review and trust the exact agentbus hooks in `/hooks` for fallback delivery. changed definitions need fresh review.
 
 hook activity is logged one line per event to `~/.agentbus/hook.log`.
 
@@ -269,8 +284,8 @@ so no restart is needed. an invalid value makes `lan serve` refuse to start. the
 `lan status`, and as a hardware line per host in `host_status` and `list_agents`:
 
 ```
-winbox hardware: 16303MiB cuda (NVIDIA GeForce RTX 5070 Ti, sm 12.0), $0/h owned
-mac-mini hardware: 16384MiB unified metal (Apple M6), $0/h owned
+gpubox hardware: 16303MiB cuda (NVIDIA GeForce RTX 5070 Ti, sm 12.0), $0/h owned
+studio hardware: 16384MiB unified metal (Apple M6), $0/h owned
 runpod-h100 hardware: 81559MiB cuda (NVIDIA H100 80GB HBM3, sm 9.0), $3.99/h runpod secure cloud on-demand
 ```
 
@@ -285,7 +300,7 @@ claude code's registry often omits its configured model. agentbus uses it when p
 first host (the always-on sms primary):
 
 ```sh
-node bin/agentbus.mjs lan init --name mac --sms-primary self
+node bin/agentbus.mjs lan init --name studio --sms-primary self
 node bin/agentbus.mjs lan install       # macos launchagent / windows logon task, starts now and at login
 node bin/agentbus.mjs lan status
 ```
@@ -313,7 +328,7 @@ only to lan or tailscale (100.64.0.0/10) addresses. a joined peer is a full memb
 group, like any lan host, so invite only machines you trust that way. joiners get no sms primary,
 so they can't reach claw-messenger.
 
-owner side, once (the host with shared task storage, e.g. the windows box):
+owner side, once (on the host with shared task storage):
 
 1. install tailscale, then `tailscale set --unattended=true` (windows) so it stays up without a
    login. connect the remote user both ways: invite them into your tailnet (simplest), or share
@@ -381,7 +396,7 @@ other commands: `lan peer list|add|remove` (static peers, picked up without a re
 
 ## one sms authority across the lan
 
-this mac is pinned as sms primary via its stable host id. every follower config points at that same id. discovery advertises the role, and authenticated inventory confirms it; discovery does not elect or promote another primary. if this mac is unreachable, followers fail closed. this avoids split-brain locks during network partitions. an intentional future promotion would require stopping/fencing the former primary and migrating its durable lock/deduplication state, not just choosing the highest mdns priority.
+one host is pinned as sms primary via its stable host id. every follower config points at that same id. discovery advertises the role, and authenticated inventory confirms it; discovery does not elect or promote another primary. if the primary is unreachable, followers fail closed. this avoids split-brain locks during network partitions. an intentional future promotion would require stopping/fencing the former primary and migrating its durable lock/deduplication state, not just choosing the highest mdns priority.
 
 only the primary runs the claw-messenger relay daemon and holds the relay credential. followers run the same `claw-messenger/mcp.mjs`; their client forwards permitted operations through agentbus to the primary. locks remain in the primary's existing lock table with holder ids like `lan:<host>/<codex-or-claude-id>`. acquisition and send reservation remain atomic in that daemon. remote acquisitions require fresh authenticated session discovery. a lost peer does **not** release its existing lock: expiry or explicit release does. remote renewal, release, send and signals while holding a lock require the current `leaseId`, obtained from the lock result or `claw_messenger_locks`; stale generations are rejected.
 
@@ -424,7 +439,7 @@ references: [bonjour-service](https://github.com/onlxltd/bonjour-service), [node
 
 - register codex threads as fake claude peers (`~/.claude/sessions/<pid>.json` + a socket agentbus owns) so claude's native `/list-agents` shows them and native `SendMessage` routes through the bus. nice, but the registry format is undocumented and version-gated.
 - when openai ships `agent_message_board` (feature flag exists, "under development"), swap the codex file inbox for it.
-- opencode support, if you ever run it.
+- opencode support.
 
 ### session launching (macos and windows)
 
@@ -434,10 +449,10 @@ references: [bonjour-service](https://github.com/onlxltd/bonjour-service), [node
 agentbus sessions configure --root /absolute/project/root --root /absolute/shared/tasks --remote --max 4
 agentbus sessions capabilities
 agentbus sessions spawn --runtime codex --cwd /absolute/project --name worker --id <request-uuid> 'the task'
-agentbus sessions spawn --runtime claude-code --host winbox --from codex:<your-thread-id> --cwd 'D:\AgentbusTasks' --id <request-uuid> 'the task'
-agentbus sessions spawn --runtime claude-code --host winbox --from codex:<your-thread-id> --cwd 'D:\AgentbusTasks' --claim gpu --id <request-uuid> 'the gpu job'   # winbox publishes compute=true / gpu=avoid while it works
-agentbus sessions status <request-uuid> --host winbox --from codex:<your-thread-id>
-agentbus sessions stop <request-uuid> --host winbox --from codex:<your-thread-id>
+agentbus sessions spawn --runtime claude-code --host gpubox --from codex:<your-thread-id> --cwd 'D:\AgentbusTasks' --id <request-uuid> 'the task'
+agentbus sessions spawn --runtime claude-code --host gpubox --from codex:<your-thread-id> --cwd 'D:\AgentbusTasks' --claim gpu --id <request-uuid> 'the gpu job'   # gpubox publishes compute=true / gpu=avoid while it works
+agentbus sessions status <request-uuid> --host gpubox --from codex:<your-thread-id>
+agentbus sessions stop <request-uuid> --host gpubox --from codex:<your-thread-id>
 agentbus sessions reconcile [--close <request-uuid>]   # local host owner: list/close stale receipts that hold no slot
 ```
 
@@ -555,7 +570,7 @@ changes the GPU scheduling verdict or overrides an explicit busy setting.
 
 - `anyHostActive`: `true` if any fresh host is active; `false` only when all known
   hosts have fresh idle observations and LAN inventory is available; otherwise
-  `null`. an idle windows host cannot override an active mac.
+  `null`. an idle host cannot override another host that is active.
 - `homeOccupancy` / `homeMotion`: independent `occupied` / `detected`,
   `not_detected`, or `unknown` aggregates. a positive fresh sensor observation
   wins; a negative requires usable negative readings from every enabled source.
@@ -608,7 +623,7 @@ code; configuration changes apply on its next poll.
 the process loaded. `--manifest` returns per-file hashes for deployment checks.
 authenticated LAN capabilities include each daemon's build and native runtime
 probe versions; launch receipts also expose each new worker’s loaded build. a running old daemon cannot claim the new on-disk hash. compare
-both hosts before calling an upgrade complete. preserve each host's working tree
+every host before calling an upgrade complete. preserve each host's working tree
 and state/config outside the release bundle; stage source, run tests, then
 restart only its LAN service. detached workers and desktop bridges continue on
 their loaded code until individually stopped or their owning app is restarted.
@@ -626,7 +641,7 @@ unconfigured. agentbus does not rewrite the user's sandbox configuration. an exp
 live smoke command performs paid model turns and saves a durable result:
 
 ```sh
-agentbus session-smoke --runtime codex --host winbox --cwd 'D:\AgentbusTasks\agentbus-smoke' --from codex:YOUR_THREAD_UUID --report /absolute/path/smoke.json
+agentbus session-smoke --runtime codex --host gpubox --cwd 'D:\AgentbusTasks\agentbus-smoke' --from codex:YOUR_THREAD_UUID --report /absolute/path/smoke.json
 ```
 
 use a dedicated existing trusted destination workspace. for remote claude-code,

@@ -39,7 +39,7 @@ test('a claude-code launch is a live job only while its native job is working an
   assert.equal(liveJob(null), null);
 });
 
-// shaped like winbox's colabfold-demo-complex-c receipt (2026-10-27): spawned by a peer with no `claims` key,
+// shaped like gpubox's colabfold-demo-complex-c receipt (2026-10-27): spawned by a peer with no `claims` key,
 // session parked on a background shell (registry status `shell`), native inventory still `working`.
 const shellWait = (over = {}) => receipt({ nativeSeen: true, nativeJobId: 'd7337c2e', agentId: 'claude:d7337c2e-d0eb-48fd-9bea-27e2842aee16', note: 'native job live; transport readiness is reported separately', ...over });
 

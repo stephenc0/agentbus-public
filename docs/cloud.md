@@ -1,12 +1,12 @@
 # on-demand cloud gpu pods
 
-one always-on group host, the **provisioner** (here mac-mini), offers rented gpu pods such as a runpod h100 80 gb. any
+one always-on group host, the **provisioner** (`studio` in these examples), offers rented gpu pods such as a runpod h100 80 gb. any
 authenticated peer starts one through agentbus, uses it like any other host, and lets it stop. requesters install
 nothing, hold no secrets and run no scripts. how the pod itself boots is in [runpod.md](runpod.md).
 
 ```
-runpod-h100: offer on mac-mini, dormant, 81559MiB cuda (NVIDIA H100 80GB HBM3), $3.99/h, cold start ~9 min, cloud_up needs max_hours or max_usd (owner cap 8h)
-runpod-h100: offer on mac-mini, live, 81559MiB cuda (NVIDIA H100 80GB HBM3), $3.99/h, live as peer runpod-h100 (started by laptop), hard stop in 171 min, idle 4 min (stops at 15)
+runpod-h100: offer on studio, dormant, 81559MiB cuda (NVIDIA H100 80GB HBM3), $3.99/h, cold start ~9 min, cloud_up needs max_hours or max_usd (owner cap 8h)
+runpod-h100: offer on studio, live, 81559MiB cuda (NVIDIA H100 80GB HBM3), $3.99/h, live as peer runpod-h100 (started by laptop), hard stop in 171 min, idle 4 min (stops at 15)
 ```
 
 these lines appear in `host_status` and `cloud_status` on every host, including while the offer is dormant. a live pod also
@@ -67,7 +67,7 @@ if the session started before agentbus was updated, the `cloud_*` tools aren't l
 - **the provisioner is a direct peer of every requester.** new invites (`lan invite`) add it to the join token
   automatically, next to the hosts you name.
 - **existing members are introduced once.** every host shares the provisioner's tailscale address in its inventory. a
-  member that peers only with another host, such as a remote laptop that joined via winbox, dials the provisioner after
+  member that peers only with another host, such as a remote laptop that joined via gpubox, dials the provisioner after
   one poll. once it authenticates, the member saves it as a static peer in its own lan config.
 - **after that the provisioner is dialed directly.** the introducing host can be off, rebooting or gaming, and it is in no
   data or control path to the provisioner or the pod. a test covers exactly that.
@@ -76,7 +76,7 @@ if the session started before agentbus was updated, the `cloud_*` tools aren't l
 
 ## provisioner setup (owner, once)
 
-on the provisioner, here mac-mini:
+on the provisioner:
 
 1. a fixed lan port, because pods and introduced hosts dial it. set `"port": 47800` in `~/.agentbus/lan/config.json`,
    then run `agentbus lan stop && agentbus lan install`.
@@ -109,17 +109,17 @@ on the provisioner, here mac-mini:
      start revokes it.
    - **legacy:** a configured `TS_AUTHKEY` is used only when no oauth client is set.
    `~/.agentbus/cloud/secrets.json` is mode 0600 and is never sent to peers. it isn't in inventory, status, errors or logs.
-4. pin the agentbus release pods run. publish to the public mirror with `node scripts/publish-public.mjs --ref <branch>
-   --public-dir ../agentbus-public`, push it, then set `"agentbusRef": "<that public commit, 40 hex>"` (or a release tag
-   like `"v0.6.1"`) at the top level of `offers.json` and rerun `agentbus cloud init`. a branch name is refused, so
+4. pin the agentbus release pods run. push the commit you want to the repo pods clone (the upstream repo by default,
+   or your fork via `"agentbusRepo": "https://..."`), then set `"agentbusRef": "<that commit, 40 hex>"` (or a release tag
+   like `"v1.0.0"`) at the top level of `offers.json` and rerun `agentbus cloud init`. a branch name is refused, so
    every pod is reproducible. without a ref, pods run the copy baked into the image and say so. the pod's build hash
-   shows in the provisioner's checks, and a mismatch with mac-mini's build is printed as a WARN line, never hidden.
+   shows in the provisioner's checks, and a mismatch with the provisioner's own build is printed as a WARN line, never hidden.
 5. restart the daemon: `agentbus lan stop && agentbus lan install`. its log says `cloud provisioner: offers runpod-h100`.
 
 ## tailscale acl
 
-pods join with the per-pod keys above, tagged `tag:agentbus-gpu`. the tailnet has no tags yet, so the tag is new policy.
-every group device, including a remote laptop joined with an invite's auth key, sits under the owner's tailnet user.
+pods join with the per-pod keys above, tagged `tag:agentbus-gpu`. if your tailnet has no tags yet, the tag is new policy.
+this assumes every group device, including a remote laptop joined with an invite's auth key, sits under the owner's tailnet user.
 
 `agentbus cloud tailnet-policy` does the safe part with the same oauth client:
 1. reads the policy file as hujson along with its etag.
@@ -158,5 +158,4 @@ a requester's claude updates its own checkout the normal way ([join.md](join.md)
 git pull && npm ci && node bin/agentbus.mjs lan stop && node bin/agentbus.mjs lan install
 ```
 
-the `cloud_*` mcp tools appear in sessions started after that. the cli works at once. a requester whose checkout is
-the public mirror gets this only after the owner publishes the build there.
+the `cloud_*` mcp tools appear in sessions started after that. the cli works at once.

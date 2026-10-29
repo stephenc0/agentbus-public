@@ -11,7 +11,7 @@ const which = (c) => spawnSync('sh', ['-c', `command -v ${c}`]).status === 0;
 // boot.sh needs flock (util-linux, present in the pod image; absent on macos) and git.
 const skip = process.platform === 'win32' || !which('flock') || !which('git') ? 'needs bash, flock and git (runs on linux)' : false;
 
-// a tiny stand-in for the public mirror: a git repo whose start.sh just reports which copy it is
+// a tiny stand-in for the upstream repo: a git repo whose start.sh just reports which copy it is
 function fakeRelease(dir, label) {
   fs.mkdirSync(path.join(dir, 'scripts/runpod'), { recursive: true }); fs.mkdirSync(path.join(dir, 'bin'));
   fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'fake', version: '1.0.0', private: true }));

@@ -323,7 +323,7 @@ test('activeSessions publishes the slot count the limit check enforces, read-onl
   assert.equal(count(), f.policy.maxSessions, 'full means full on both sides');
   const file = path.join(dir, f.request.id + '.json');
   writeLaunch(file, { ...readLaunch(file), state: 'failed' }); assert.equal(count(), 1, 'failed releases');
-  // an uncertain receipt (the mac-mini case) holds a slot, as it does at spawn time
+  // an uncertain receipt (the studio case) holds a slot, as it does at spawn time
   writeLaunch(file, { ...readLaunch(file), state: 'uncertain' }); assert.equal(count(), 2);
   writeLaunch(file, { ...readLaunch(file), state: 'stopped' }); assert.equal(count(), 1);
   // stale: dead worker, native job blocked past the window. free unless its session is still discovered

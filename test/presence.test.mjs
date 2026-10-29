@@ -272,7 +272,7 @@ test('an unclaimed live launch is published as unclaimed and never moves gpu, us
   assert.equal(idle.gpu, 'free', 'no claim, no promise about load: an idle gpu stays free'); assert.equal(idle.user, 'away');
   assert.equal(idle.compute, false); assert.deepEqual(idle.jobs, []); assert.deepEqual(idle.unclaimed.map((j) => j.name), ['colabfold-demo-complex-c']);
   assert.ok(!idle.reasons.some((r) => /compute|colabfold/.test(r)));
-  // the observed winbox case: a loaded gpu is avoided by the sustained-load rule, still with no fabricated job
+  // the observed gpubox case: a loaded gpu is avoided by the sustained-load rule, still with no fabricated job
   const loaded = assessPresence({ userIdleSec: 9999, fullscreen: false, gpuUtil: 100, jobs: [launch] }, null, Date.now(), [100]);
   assert.equal(loaded.gpu, 'avoid'); assert.equal(loaded.compute, false); assert.equal(loaded.unclaimed.length, 1);
   const both = assessPresence({ userIdleSec: 9999, gpuUtil: 0, jobs: [launch, claimed] });

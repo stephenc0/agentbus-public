@@ -68,12 +68,12 @@ test('role persists in host history and travels with shared known hosts; anythin
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-kh-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'hosts.json'), id = crypto.randomUUID();
   const r = createKnownHosts(file);
-  r.observe({ hostId: id, name: 'winbox', checkedAt: 1000, address: '192.168.1.20', role: 'host' });
-  assert.deepEqual(createKnownHosts(file).snapshot(), [{ hostId: id, name: 'winbox', lastAuthenticatedAt: 1000, link: 'lan', role: 'host' }]);
-  r.observe({ hostId: id, name: 'winbox', checkedAt: 1500, address: '192.168.1.20', role: 'client' });
+  r.observe({ hostId: id, name: 'gpubox', checkedAt: 1000, address: '192.168.1.20', role: 'host' });
+  assert.deepEqual(createKnownHosts(file).snapshot(), [{ hostId: id, name: 'gpubox', lastAuthenticatedAt: 1000, link: 'lan', role: 'host' }]);
+  r.observe({ hostId: id, name: 'gpubox', checkedAt: 1500, address: '192.168.1.20', role: 'client' });
   assert.equal('role' in createKnownHosts(file).snapshot()[0], false, 'a host that turns client re-saves at once');
   const build = { features: [SHARED_KNOWN_HOSTS_FEATURE] };
-  const shared = sanitizeSharedKnownHosts({ build, knownHosts: shareKnownHosts([{ hostId: id, name: 'winbox', lastAuthenticatedAt: 5, role: 'host' }, { hostId: id, name: 'x', lastAuthenticatedAt: 5, role: 'admin' }]) });
+  const shared = sanitizeSharedKnownHosts({ build, knownHosts: shareKnownHosts([{ hostId: id, name: 'gpubox', lastAuthenticatedAt: 5, role: 'host' }, { hostId: id, name: 'x', lastAuthenticatedAt: 5, role: 'admin' }]) });
   assert.deepEqual(shared.map((h) => h.role), ['host', undefined]);
 });
 

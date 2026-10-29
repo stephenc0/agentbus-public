@@ -1,6 +1,6 @@
 # agentbus gpu peer for runpod (h100 / rtx pro 6000 / a100). build with NO context (the dockerfile on stdin), from the
 # published mirror commit:
-#   docker buildx build --platform linux/amd64 --build-arg AGENTBUS_REF=<public mirror commit> \
+#   docker buildx build --platform linux/amd64 --build-arg AGENTBUS_REF=<commit, 40 hex> \
 #     -t <registry>/agentbus-runpod:<tag> --push - < scripts/runpod/Dockerfile
 #
 # this image is the BASE LAYER only: cuda runtime, node, claude code, tailscale, and three isolated folding stacks
@@ -51,8 +51,8 @@ RUN python3.12 -m venv /opt/esm && /opt/esm/bin/pip install --no-cache-dir --upg
     && /opt/esm/bin/pip check \
     && /opt/esm/bin/python -c "import torch, esm; from esm.models.esmfold2 import EsmFold2Model; v = torch.__version__.split('+')[0]; assert v == '${ESM_TORCH_VERSION}', f'esm torch drifted to {torch.__version__}'; assert torch.version.cuda == '13.0', f'esm torch is cuda {torch.version.cuda}, expected 13.0'; print('esm smoke ok: torch', torch.__version__, 'cuda', torch.version.cuda)"
 
-# colabfold: localcolabfold's pixi install (YoshitakaMo/localcolabfold main, "use jax 0.10.1"), the same route as winbox's
-# ~/localcolabfold. its pyproject tracks ColabFold main unpinned; we pin ColabFold to the v1.6.3 tag (winbox runs 1.6.3).
+# colabfold: localcolabfold's pixi install (YoshitakaMo/localcolabfold main, "use jax 0.10.1"), the same route as a local
+# ~/localcolabfold install. its pyproject tracks ColabFold main unpinned; we pin ColabFold to the v1.6.3 tag.
 ARG LOCALCOLABFOLD_REV=e2e8c4a834a3d50ebaede3bb42786707fdc8f6ec
 ARG COLABFOLD_REV=84c27d9cc500489fd9b97545d2325b9d00f251d5
 ARG PIXI_VERSION=v0.83.0
@@ -96,16 +96,17 @@ RUN python3.12 -m venv /opt/boltz && /opt/boltz/bin/pip install --no-cache-dir -
 # (several gb) into BOLTZ_CACHE, which belongs on the volume, not in the image. the first real job does that once.
 RUN printf '%s\n' '#!/bin/sh' 'exec /opt/esm/bin/python "$@"' > /usr/local/bin/esm-python && chmod 0755 /usr/local/bin/esm-python
 
-# agentbus: the baked bootstrap/fallback copy, cloned from the PUBLIC mirror at a pinned ref. nothing is copied from the
-# build context, so a private checkout can never end up in the image (build with `-` as context, see docs/runpod.md).
+# agentbus: the baked bootstrap/fallback copy, cloned over https at a pinned ref. nothing is copied from the build
+# context, so local state or uncommitted files can never end up in the image (build with `-` as context, see docs/runpod.md).
+# AGENTBUS_REPO defaults to upstream; point it at your fork if you run one.
 # the running copy normally comes from the volume at the provisioner's AGENTBUS_REF (boot.sh).
 ARG AGENTBUS_REPO=https://github.com/stephenc0/agentbus-public.git
 ARG AGENTBUS_REF
 RUN set -e; \
-    case "$AGENTBUS_REPO" in https://*/agentbus-public|https://*/agentbus-public.git) ;; \
-      *) echo "refusing: AGENTBUS_REPO must be the public agentbus mirror (…/agentbus-public), got $AGENTBUS_REPO" >&2; exit 1;; esac; \
+    case "$AGENTBUS_REPO" in https://*) ;; \
+      *) echo "refusing: AGENTBUS_REPO must be an https url (pods hold no git credential), got $AGENTBUS_REPO" >&2; exit 1;; esac; \
     echo "$AGENTBUS_REF" | grep -Eq '^([0-9a-f]{40}|v[0-9][0-9A-Za-z._-]{0,40})$' \
-      || { echo "refusing: pass --build-arg AGENTBUS_REF=<40-hex public mirror commit or v-tag>" >&2; exit 1; }; \
+      || { echo "refusing: pass --build-arg AGENTBUS_REF=<40-hex commit or v-tag>" >&2; exit 1; }; \
     case "$AGENTBUS_REF" in v*) fetchref="refs/tags/$AGENTBUS_REF";; *) fetchref="$AGENTBUS_REF";; esac; \
     mkdir -p /opt/agentbus && cd /opt/agentbus && git init -q && git remote add origin "$AGENTBUS_REPO" \
     && git fetch -q --depth 1 origin "$fetchref" && git checkout -q --detach FETCH_HEAD \

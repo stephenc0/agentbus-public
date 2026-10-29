@@ -69,7 +69,7 @@ async function forward(row) {
   // Durable claim prevents a replay/restart from forwarding the same event twice.
   store.forwarding(row.seq,{state:'attempted',target,lock:lock?.holder??null});
   try {
-    const {stdout}=await run('/opt/homebrew/bin/node',[fileURLToPath(new URL('./push.mjs',import.meta.url)),target,message],{timeout:20000,maxBuffer:65536});
+    const {stdout}=await run(process.execPath,[fileURLToPath(new URL('./push.mjs',import.meta.url)),target,message],{timeout:20000,maxBuffer:65536});
     let result;try{result=JSON.parse(stdout)}catch{result={state:'unknown',output:stdout.slice(0,1000)}}
     store.forwarding(row.seq,{...result,target,lock:lock?.holder??null});
     if(result.ok && lock?.releaseOnReply)locks.releaseAfterReply(sender,lock.leaseId);

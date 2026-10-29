@@ -56,7 +56,7 @@ test('known hosts record the coarse link kind of the last authenticated address;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-known-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'hosts.json'), hostId = crypto.randomUUID();
   assert.equal(linkKind('100.101.2.3'), 'wan'); assert.equal(linkKind('192.168.1.20'), 'lan'); assert.equal(linkKind('10.0.0.4'), 'lan');
-  assert.equal(linkKind('winbox.local'), undefined); assert.equal(linkKind('8.8.8.8'), undefined); assert.equal(linkKind('fd7a:115c::1'), undefined); assert.equal(linkKind(undefined), undefined);
+  assert.equal(linkKind('gpubox.local'), undefined); assert.equal(linkKind('8.8.8.8'), undefined); assert.equal(linkKind('fd7a:115c::1'), undefined); assert.equal(linkKind(undefined), undefined);
   const r = createKnownHosts(file);
   const onDisk = () => JSON.parse(fs.readFileSync(file, 'utf8')).hosts[0];
   r.observe({ hostId, name: 'laptop', checkedAt: 1000, address: '192.168.1.20' });

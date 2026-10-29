@@ -4,9 +4,17 @@
   "description": "discovery, messaging and job file transfer between local, LAN and tailscale-connected claude/codex sessions",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test test/*.test.mjs claw-messenger/test/*.test.mjs"
+    "test": "node --test test/*.test.mjs claw-messenger/test/*.test.mjs",
+    "leak-check": "node scripts/leak-check.mjs"
   },
-  "keywords": [],
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "codex",
+    "agents",
+    "tailscale",
+    "runpod"
+  ],
   "author": "",
   "license": "MIT",
   "type": "module",
@@ -18,5 +26,10 @@
   "private": true,
   "bin": {
     "agentbus": "bin/agentbus.mjs"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stephenc0/agentbus-public.git"
+  },
+  "homepage": "https://github.com/stephenc0/agentbus-public#readme"
 }

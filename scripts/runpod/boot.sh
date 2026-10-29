@@ -2,8 +2,8 @@
 # image entrypoint: run the agentbus release the provisioner pinned, from the network volume, so agentbus updates need no
 # image rebuild. the image's own copy (/opt/agentbus) is only the bootstrap and the fallback.
 #
-#   AGENTBUS_REF   exact public-mirror commit (40 hex) or release tag (v1.2.3). never a branch: a pod must be reproducible.
-#   AGENTBUS_REPO  default https://github.com/stephenc0/agentbus-public.git (public: pods hold no github credential)
+#   AGENTBUS_REF   exact commit (40 hex) or release tag (v1.2.3). never a branch: a pod must be reproducible.
+#   AGENTBUS_REPO  https url, default upstream https://github.com/stephenc0/agentbus-public.git (pods hold no git credential)
 #
 # each ref is fetched and npm-installed once into /workspace/agentbus/<ref> (under a lock, so pods sharing the volume don't
 # race), then reused by later pods. any failure falls back to the baked copy and says so loudly.

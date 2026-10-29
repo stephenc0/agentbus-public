@@ -53,10 +53,10 @@ test('apple unified memory is reported as a comparable size, and host_status pri
   assert.equal(caps.gpus[0].memoryMiB, 16384);
   assert.equal(formatHardware({ ...caps, gpu_cost_per_hour: 0, billing: 'owned' }), '16384MiB unified metal (Apple M6), $0/h owned');
   assert.equal(hostAdvertisement({ hostId: 'h', name: 'mac' }, caps, 0).gpu_memory, '16384MiB unified');
-  const text = formatHostStatuses({ local: { name: 'mac-mini', presence: null, usage: null, capabilities: { ...caps, gpu_cost_per_hour: 0, billing: 'owned' } }, peers: [{ hostId: 'p', name: 'runpod-h100', presence: null, usage: null, capabilities: { gpus: [{ name: 'NVIDIA H100 80GB HBM3', memoryMiB: 81559, cudaComputeCapability: '9.0' }], gpu_cost_per_hour: 2.89, billing: 'runpod' } }, { hostId: 'q', name: 'winbox', presence: null, usage: null, capabilities: { gpus: [{ name: 'RTX', memoryMiB: 16303, cudaComputeCapability: '12.0' }] } }], lan: 'ok' });
-  assert.match(text, /^mac-mini hardware: 16384MiB unified metal \(Apple M6\), \$0\/h owned$/m);
+  const text = formatHostStatuses({ local: { name: 'studio', presence: null, usage: null, capabilities: { ...caps, gpu_cost_per_hour: 0, billing: 'owned' } }, peers: [{ hostId: 'p', name: 'runpod-h100', presence: null, usage: null, capabilities: { gpus: [{ name: 'NVIDIA H100 80GB HBM3', memoryMiB: 81559, cudaComputeCapability: '9.0' }], gpu_cost_per_hour: 2.89, billing: 'runpod' } }, { hostId: 'q', name: 'gpubox', presence: null, usage: null, capabilities: { gpus: [{ name: 'RTX', memoryMiB: 16303, cudaComputeCapability: '12.0' }] } }], lan: 'ok' });
+  assert.match(text, /^studio hardware: 16384MiB unified metal \(Apple M6\), \$0\/h owned$/m);
   assert.match(text, /^runpod-h100 hardware: 81559MiB cuda \(NVIDIA H100 80GB HBM3, sm 9\.0\), \$2\.89\/h runpod$/m);
-  assert.match(text, /^winbox hardware: 16303MiB cuda \(RTX, sm 12\.0\), cost unknown$/m, 'a missing price is said to be unknown');
+  assert.match(text, /^gpubox hardware: 16303MiB cuda \(RTX, sm 12\.0\), cost unknown$/m, 'a missing price is said to be unknown');
 });
 
 test('presence still links against a host-capabilities module cached from before cost/hardware existed (stale mcp servers)', async (t) => {
@@ -68,6 +68,6 @@ test('presence still links against a host-capabilities module cached from before
   // an older host-capabilities.mjs: no hostCost, no formatHardware
   fsm.writeFileSync(pathm.join(dir, 'host-capabilities.mjs'), "export const hostCapabilities = () => ({ os: { type: 'macos' }, cpu: {}, memoryBytes: 0, gpus: [], gpuDetection: 'unavailable' });\nexport const sanitizeCapabilities = (v) => v || null;\nexport const claudeModel = () => ({ model: null, modelSource: 'unknown' });\n");
   const presence = await import(pathToFileURL(pathm.join(dir, 'presence.mjs')).href);
-  const text = presence.formatHostStatuses({ local: { name: 'mac-mini', presence: null, usage: null, capabilities: null }, peers: [], lan: 'ok' });
-  assert.match(text, /mac-mini hardware: hardware unknown/);
+  const text = presence.formatHostStatuses({ local: { name: 'studio', presence: null, usage: null, capabilities: null }, peers: [], lan: 'ok' });
+  assert.match(text, /studio hardware: hardware unknown/);
 });

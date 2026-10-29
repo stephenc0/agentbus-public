@@ -37,7 +37,7 @@ test('overlay addresses, static peer validation and join tokens', () => {
   assert.equal(overlayIPv4('100.63.0.1'), false); assert.equal(overlayIPv4('100.128.0.1'), false); assert.equal(overlayIPv4('8.8.8.8'), false);
   const id = crypto.randomUUID();
   assert.deepEqual(validatePeers([{ hostId: id, address: '100.80.1.2', port: 47800, name: 'win' }]), [{ hostId: id, address: '100.80.1.2', port: 47800, name: 'win' }]);
-  assert.doesNotThrow(() => validatePeers([{ hostId: id, address: 'winbox.tail1234.ts.net', port: 47800 }]));
+  assert.doesNotThrow(() => validatePeers([{ hostId: id, address: 'gpubox.tail1234.ts.net', port: 47800 }]));
   assert.throws(() => validatePeers([{ hostId: id, address: '8.8.8.8', port: 47800 }]), /private\/overlay/);
   assert.throws(() => validatePeers([{ hostId: id, address: '100.80.1.2', port: 0 }]), /port/);
   assert.throws(() => validatePeers([{ hostId: id, address: '100.80.1.2', port: 1 }, { hostId: id, address: '100.80.1.3', port: 1 }]), /unique/);
@@ -179,17 +179,17 @@ test('leak check blocks phone numbers, emails and local secrets but not addresse
 
 test('invite carries a working token and refuses identifying content; join writes an overlay-only config', async (t) => {
   const root = tmp(t), owner = path.join(root, 'owner');
-  initLan({ busDir: owner, name: 'winbox', port: 47800, bind: '0.0.0.0' });
+  initLan({ busDir: owner, name: 'gpubox', port: 47800, bind: '0.0.0.0' });
   const invite = await buildInvite({ busDir: owner, peerSpecs: ['self=100.90.0.4'], name: 'friend', repo: 'https://github.com/example/agentbus' });
   const token = /^AGENTBUS_JOIN_TOKEN=(\S+)$/m.exec(invite.text)[1];
   assert.equal(token, invite.token);
   assert.match(invite.text, /^AGENTBUS_NAME=friend$/m);
-  assert.match(invite.text, /^AGENTBUS_PEER=winbox 100\.90\.0\.4:47800$/m);
+  assert.match(invite.text, /^AGENTBUS_PEER=gpubox 100\.90\.0\.4:47800$/m);
   assert.match(invite.text, /https:\/\/github\.com\/example\/agentbus\/blob\/main\/docs\/join\.md/);
   assert.doesNotMatch(invite.text, /AGENTBUS_PORT|TS_AUTHKEY/);
   assert.ok(invite.text.split('\n').length < 15, 'invite stays short');
   const ownerConfig = loadLan(owner);
-  assert.deepEqual(decodeJoinToken(token), { key: ownerConfig.key.toString('hex'), peers: [{ hostId: ownerConfig.hostId, name: 'winbox', address: '100.90.0.4', port: 47800 }] });
+  assert.deepEqual(decodeJoinToken(token), { key: ownerConfig.key.toString('hex'), peers: [{ hostId: ownerConfig.hostId, name: 'gpubox', address: '100.90.0.4', port: 47800 }] });
   await assert.rejects(buildInvite({ busDir: owner, peerSpecs: ['self=100.90.0.4'], repo: 'https://example.com/call-555-555-0142' }), /refusing to print the invite/);
   const withKey = await buildInvite({ busDir: owner, peerSpecs: ['self=100.90.0.4'], name: 'friend', repo: 'https://github.com/example/agentbus', tailscaleAuthKey: 'tskey-auth-k1234567CNTRL-0123456789abcdef' });
   assert.match(withKey.text, /^TS_AUTHKEY=tskey-auth-k1234567CNTRL-0123456789abcdef$/m);
@@ -223,7 +223,7 @@ test('1 GiB streams through the blob lane with flat memory', { skip: !process.en
 
 test('an existing group member joining remotely keeps key, host id and mdns; fixes port 0 and a vanished bind', async (t) => {
   const root = tmp(t), owner = path.join(root, 'owner'), member = path.join(root, 'member');
-  initLan({ busDir: owner, name: 'winbox', port: 47800 });
+  initLan({ busDir: owner, name: 'gpubox', port: 47800 });
   const ownerConfig = loadLan(owner);
   initLan({ busDir: member, name: 'laptop', keyFile: path.join(owner, 'lan', 'key') }); // joined at the owner's place: port 0, default bind
   const cfgFile = path.join(member, 'lan', 'config.json');

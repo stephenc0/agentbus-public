@@ -58,7 +58,7 @@ async function joinToken(peerSpecs) {
   if (process.env.AGENTBUS_JOIN_TOKEN) return process.env.AGENTBUS_JOIN_TOKEN;
   const { buildInvite } = await lib('wan.mjs');
   // the pod must dial this host: it is in the token by default. add others with --peer name=100.x.y.z:port
-  const { token } = await buildInvite({ peerSpecs: peerSpecs?.length ? peerSpecs : ['self'], repo: 'https://github.com/stephenc0/agentbus-public', name: 'runpod' });
+  const { token } = await buildInvite({ peerSpecs: peerSpecs?.length ? peerSpecs : ['self'], repo: '<repo>', name: 'runpod' });
   return token;
 }
 

@@ -91,5 +91,5 @@ test('pod scripts carry no secrets and start.sh passes shell syntax', () => {
   // the image never takes files from the build context (a private checkout must not end up in a public image)
   const dockerfile = fs.readFileSync(new URL('Dockerfile', dir), 'utf8');
   assert.doesNotMatch(dockerfile, /^\s*(COPY|ADD)\s/m, 'no COPY/ADD from the build context');
-  assert.match(dockerfile, /ARG AGENTBUS_REF\n/); assert.match(dockerfile, /refusing: AGENTBUS_REPO must be the public agentbus mirror/);
+  assert.match(dockerfile, /ARG AGENTBUS_REF\n/); assert.match(dockerfile, /refusing: AGENTBUS_REPO must be an https url/);
 });

@@ -16,7 +16,7 @@ const agent = (name) => ({ id: `claude:${crypto.randomUUID()}`, kind: 'claude', 
 const freePort = () => new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => r(port)); }); });
 const until = async (what, fn, ms = 20000) => { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) throw Error(`timed out waiting for ${what}`); await new Promise((r) => setTimeout(r, 100)); } };
 
-// provisioner (mac-mini), requester (laptop) and a fake runpod whose createPod boots a third daemon from the pod env.
+// provisioner (studio), requester (laptop) and a fake runpod whose createPod boots a third daemon from the pod env.
 async function world(t, { idleMinutes = 10, relay = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-cloud-')), key = crypto.randomBytes(32);
   const common = { mdns: false, allowLoopback: true, pollMs: 200, log: () => {}, deliverLocal: async () => ({ ok: true, delivery: 'accepted' }) };
@@ -44,17 +44,17 @@ async function world(t, { idleMinutes = 10, relay = false } = {}) {
   };
   const podAgent = agent('pod-worker'), macAgent = agent('mac-worker'), remoteAgent = agent('laptop-worker');
   const cloudConfig = validateCloudConfig({ idleMinutes, maxHours: 4, agentbusRef: 'a'.repeat(40), offers: [{ name: 'runpod-h100', image: 'reg/agentbus-runpod:1', volumeId: 'vol1', coldStartMinutes: 1, minCuda: '13.0', ratePerHour: 1.9 }] }); // a stale community price in config
-  const ca = mk('mac-mini', { port: await freePort() });
+  const ca = mk('studio', { port: await freePort() });
   const A = await startLan({ ...common, config: ca, listLocal: () => [macAgent], cloud: { api, cloudConfig, secrets: () => ({ RUNPOD_API_KEY: 'rp', TS_OAUTH_CLIENT_ID: 'cid', TS_OAUTH_CLIENT_SECRET: 'csecret' }), tailscale, overlay: () => ['127.0.0.1'], sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 100))), readyTimeoutMs: 20000 } });
-  // relay: requester peers only with winbox (as today), winbox with mac-mini; requester must be introduced to the provisioner
+  // relay: requester peers only with gpubox, gpubox with studio; requester must be introduced to the provisioner
   let D = null, cd = null;
   if (relay) {
-    cd = mk('winbox', { port: await freePort() });
-    fs.writeFileSync(path.join(cd.dir, 'config.json'), JSON.stringify({ hostId: cd.hostId, name: 'winbox', port: cd.port, bind: '127.0.0.1', peers: [{ hostId: ca.hostId, address: '127.0.0.1', port: ca.port, name: 'mac-mini' }] }));
-    D = await startLan({ ...common, cloud: false, config: cd, listLocal: () => [agent('winbox-worker')] });
+    cd = mk('gpubox', { port: await freePort() });
+    fs.writeFileSync(path.join(cd.dir, 'config.json'), JSON.stringify({ hostId: cd.hostId, name: 'gpubox', port: cd.port, bind: '127.0.0.1', peers: [{ hostId: ca.hostId, address: '127.0.0.1', port: ca.port, name: 'studio' }] }));
+    D = await startLan({ ...common, cloud: false, config: cd, listLocal: () => [agent('gpubox-worker')] });
   }
   const cc = mk('laptop');
-  const first = relay ? { hostId: cd.hostId, port: cd.port, name: 'winbox' } : { hostId: ca.hostId, port: ca.port, name: 'mac-mini' };
+  const first = relay ? { hostId: cd.hostId, port: cd.port, name: 'gpubox' } : { hostId: ca.hostId, port: ca.port, name: 'studio' };
   fs.writeFileSync(path.join(cc.dir, 'config.json'), JSON.stringify({ hostId: cc.hostId, name: 'laptop', port: 0, bind: '127.0.0.1', peers: [{ ...first, address: '127.0.0.1' }] }));
   const C = await startLan({ ...common, cloud: false, config: cc, listLocal: () => [remoteAgent] });
   t.after(async () => { for (const p of pods.values()) await p.daemon.close(); await Promise.all([A.close(), C.close(), D?.close()]); fs.rmSync(root, { recursive: true, force: true }); });
@@ -70,7 +70,7 @@ test('cloud config, secrets and inventory are validated; secrets never leave the
   assert.throws(() => validateCloudConfig({ maxHours: -1, offers: [{ name: 'x', image: 'i', volumeId: 'v' }] }), /maxHours/);
   assert.throws(() => validateCloudConfig({ offers: [{ name: 'x', image: 'i', volumeId: 'v', minCuda: '13.0', cuda: ['13.0'] }] }), /exclusive/);
   assert.throws(() => validateCloudConfig({ offers: [{ name: 'x', image: 'i', volumeId: 'v', minCuda: 'thirteen' }] }), /major\.minor/);
-  for (const ref of ['main', 'deploy/mac-mini', 'abc123', 'v']) assert.throws(() => validateCloudConfig({ agentbusRef: ref, offers: [{ name: 'x', image: 'i', volumeId: 'v' }] }), /agentbusRef/, ref);
+  for (const ref of ['main', 'deploy/studio', 'abc123', 'v']) assert.throws(() => validateCloudConfig({ agentbusRef: ref, offers: [{ name: 'x', image: 'i', volumeId: 'v' }] }), /agentbusRef/, ref);
   assert.equal(validateCloudConfig({ agentbusRef: 'v0.6.1', offers: [{ name: 'x', image: 'i', volumeId: 'v' }] }).agentbusRef, 'v0.6.1');
   assert.throws(() => validateCloudConfig({ agentbusRepo: 'git@github.com:x/y.git', offers: [{ name: 'x', image: 'i', volumeId: 'v' }] }), /https/);
   const c = validateCloudConfig({ offers: [{ name: 'runpod-h100', image: 'i', volumeId: 'v' }] });
@@ -84,13 +84,13 @@ test('cloud config, secrets and inventory are validated; secrets never leave the
   const s = sanitizeCloud({ provisionerHostId: crypto.randomUUID(), offers: [{ name: 'runpod-h100', state: 'evil', gpu: 'H100', ratePerHour: 2.5, RUNPOD_API_KEY: 'leak', pod: { hostId: crypto.randomUUID(), address: '8.8.8.8', port: 1 } }] });
   assert.equal(s.offers[0].state, 'dormant'); assert.equal(s.offers[0].pod.address, null, 'only tailscale/loopback pod addresses pass');
   assert(!JSON.stringify(s).includes('leak'));
-  assert.match(formatOffer({ ...s.offers[0], gpuMemoryMiB: 81559, coldStartMinutes: 9, maxHours: 8 }, 'mac-mini'), /^runpod-h100: offer on mac-mini, dormant, 81559MiB cuda \(H100\), \$2\.5\/h, cold start ~9 min/);
+  assert.match(formatOffer({ ...s.offers[0], gpuMemoryMiB: 81559, coldStartMinutes: 9, maxHours: 8 }, 'studio'), /^runpod-h100: offer on studio, dormant, 81559MiB cuda \(H100\), \$2\.5\/h, cold start ~9 min/);
 });
 
 test('a peer starts a pod through the provisioner, reaches it directly, and idle shutdown waits for fetched results then purges them', { timeout: 90000 }, async (t) => {
   const w = await world(t, { relay: true });
-  // the requester was configured with winbox only; winbox introduced the provisioner, and the requester saved it
-  await until('introduced provisioner saved as a static peer', () => JSON.parse(fs.readFileSync(path.join(w.cc.dir, 'config.json'), 'utf8')).peers.some((p) => p.hostId === w.ca.hostId && p.name === 'mac-mini'));
+  // the requester was configured with gpubox only; gpubox introduced the provisioner, and the requester saved it
+  await until('introduced provisioner saved as a static peer', () => JSON.parse(fs.readFileSync(path.join(w.cc.dir, 'config.json'), 'utf8')).peers.some((p) => p.hostId === w.ca.hostId && p.name === 'studio'));
   const offerOf = async () => (await w.requester({ op: 'cloud', action: 'status' })).provisioners?.[0]?.offers?.[0];
   // dormant offer visible to the requester, with its price
   const dormant = await until('offer listed', offerOf);
@@ -100,7 +100,7 @@ test('a peer starts a pod through the provisioner, reaches it directly, and idle
   assert.match((await w.requester({ op: 'cloud', action: 'up', offer: 'runpod-h100', from: w.remoteAgent.id })).error, /max_hours or max_usd/);
   assert.match((await w.requester({ op: 'cloud', action: 'up', offer: 'runpod-h100', maxHours: 1, from: `claude:${crypto.randomUUID()}` })).error, /live local agent/);
   const up = await w.requester({ op: 'cloud', action: 'up', offer: 'runpod-h100', maxUsd: 5, from: w.remoteAgent.id });
-  assert.equal(up.ok, true, up.error); assert.equal(up.started, true); assert.equal(up.provisioner, 'mac-mini');
+  assert.equal(up.ok, true, up.error); assert.equal(up.started, true); assert.equal(up.provisioner, 'studio');
   assert.equal(w.created.length, 1);
   const env = w.created[0].env;
   assert.equal(env.AGENTBUS_REF, 'a'.repeat(40), 'pods are pinned to the provisioner\'s agentbus release');
@@ -116,7 +116,7 @@ test('a peer starts a pod through the provisioner, reaches it directly, and idle
   assert.ok(live.progress.some((l) => /blob roundtrip/.test(l)), 'lan doctor checks ran before live');
   assert.ok(live.progress.some((l) => /agentbus build: \w{8} on both/.test(l)), 'the pod build is compared with the provisioner build');
   assert.ok(live.progress.some((l) => /minted a single-use ephemeral tailscale key/.test(l)));
-  const persisted = fs.readFileSync(path.join(w.root, 'mac-mini', 'cloud', 'state.json'), 'utf8');
+  const persisted = fs.readFileSync(path.join(w.root, 'studio', 'cloud', 'state.json'), 'utf8');
   assert.ok(!persisted.includes('SECRET') && !JSON.stringify(live).includes('SECRET'), 'the minted key is never persisted or published');
   // a second request shares the live pod, no second create
   const again = await w.requester({ op: 'cloud', action: 'up', offer: 'runpod-h100', maxHours: 1, from: w.remoteAgent.id });
@@ -124,7 +124,7 @@ test('a peer starts a pod through the provisioner, reaches it directly, and idle
   // host_status text shows the offer
   const status = await localLanRequest({ op: 'status' }, { busDir: path.join(w.root, 'laptop') });
   const text = formatHostStatuses({ local: { name: 'laptop', presence: null, usage: null, capabilities: null }, peers: status.peers.filter((p) => !p.error).map((p) => ({ ...p, presence: null, usage: null })), lan: 'ok' });
-  assert.match(text, /^runpod-h100: offer on mac-mini, live, \d+MiB~? cuda \(NVIDIA H100 80GB HBM3\), \$2\.5\/h, live as peer runpod-h100 \(started by laptop\), hard stop in \d+ min/m);
+  assert.match(text, /^runpod-h100: offer on studio, live, \d+MiB~? cuda \(NVIDIA H100 80GB HBM3\), \$2\.5\/h, live as peer runpod-h100 \(started by laptop\), hard stop in \d+ min/m);
   assert.match(text, /^runpod-h100 hardware: .*\$2\.5\/h runpod secure cloud on-demand$/m, 'the live pod is also a normal peer with its own cost');
   // requester talks to the pod directly: upload inputs, the job writes results
   const podPeer = w.C.peers.get(live.pod.hostId);
@@ -150,7 +150,7 @@ test('a peer starts a pod through the provisioner, reaches it directly, and idle
   assert.equal(w.pods.size, 0, 'pod terminated at the provider');
   assert.deepEqual(stopped.keptTasks, []);
   await until('requester to drop the dead pod', () => !w.C.peers.get(live.pod.hostId) || w.C.peers.get(live.pod.hostId).error);
-  const known = await localLanRequest({ op: 'status' }, { busDir: path.join(w.root, 'mac-mini') });
+  const known = await localLanRequest({ op: 'status' }, { busDir: path.join(w.root, 'studio') });
   assert.equal(known.knownHosts.some((h) => h.hostId === live.pod.hostId), false, 'an ephemeral pod never enters host history');
 });
 
@@ -181,13 +181,13 @@ test('an introduced provisioner is saved as a static peer: with the introducing 
   const w = await world(t, { relay: true });
   const cfgFile = path.join(w.cc.dir, 'config.json');
   await until('introduction persisted', () => JSON.parse(fs.readFileSync(cfgFile, 'utf8')).peers.some((p) => p.hostId === w.ca.hostId));
-  await w.D.close(); // winbox off (rebooting, gaming)
+  await w.D.close(); // gpubox off (rebooting, gaming)
   await until('requester dials the provisioner as a static peer', () => { const p = w.C.peers.get(w.ca.hostId); return p?.static && !p.error && p.checkedAt > Date.now() - 2000; });
   const offerOf = async () => (await w.requester({ op: 'cloud', action: 'status' })).provisioners?.[0]?.offers?.[0];
   assert.equal((await w.requester({ op: 'cloud', action: 'up', offer: 'runpod-h100', maxHours: 1, from: w.remoteAgent.id })).ok, true);
   const live = await until('pod live and reached directly', async () => { const o = await offerOf(); return o?.state === 'live' && o.fromHere?.authenticated && o.fromHere.reachBack && o; }, 30000);
   const k = w.C.peers.get(w.cd.hostId);
-  assert.ok(!k || k.error, 'winbox is down, so it is in no path');
+  assert.ok(!k || k.error, 'gpubox is down, so it is in no path');
   const src = path.join(w.root, 'in.bin'); fs.writeFileSync(src, 'x');
   await uploadFile(w.cc, w.C.peers.get(live.pod.hostId), { task: crypto.randomUUID(), name: 'in.bin', file: src });
   assert.equal((await w.requester({ op: 'cloud', action: 'down', offer: 'runpod-h100', from: w.remoteAgent.id })).ok, true);

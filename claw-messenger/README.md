@@ -15,7 +15,7 @@ one launchd daemon owns the relay websocket. each agent runs the same stdio mcp 
 - diagnostics: `~/.claw-messenger/daemon.log`
 - routing: `~/.claw-messenger/routes.json`
 
-codex registration is in `~/.codex/config.toml`, claude user registration is in `~/.claude.json`. both run `/opt/homebrew/bin/node /path/to/agentbus/claw-messenger/mcp.mjs`. existing sessions may need their mcp server reloaded or a new session to load tools. the daemon remains independent of either client. mac sleep or loss of networking interrupts delivery until reconnection; launchd starts the daemon at login.
+codex registration is in `~/.codex/config.toml`, claude user registration is in `~/.claude.json`. both run `<absolute path of node> /path/to/agentbus/claw-messenger/mcp.mjs`. existing sessions may need their mcp server reloaded or a new session to load tools. the daemon remains independent of either client. mac sleep or loss of networking interrupts delivery until reconnection; launchd starts the daemon at login.
 
 ## tools and behavior
 
