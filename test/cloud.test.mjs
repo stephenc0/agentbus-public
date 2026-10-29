@@ -204,3 +204,19 @@ test('a failed start revokes the unused minted tailscale key and returns the off
   assert.match(o.lastError, /no capacity/);
   assert.deepEqual(w.revoked, ['kid1']);
 });
+
+test('cloud init output reloads: absent optional fields come back as null and are accepted; configured gpu memory beats the catalog', async (t) => {
+  // what cloud init writes for an offers.json without agentbusRepo/agentbusRef/maxUsd and offers without optional fields
+  const written = JSON.parse(JSON.stringify(validateCloudConfig({ maxHours: 3, offers: [{ name: 'runpod-h100', image: 'i', volumeId: 'v', gpuMemoryMiB: 81559 }, { name: 'runpod-rtx6000', image: 'i', volumeId: 'v' }] })));
+  assert.equal(written.agentbusRepo, null); assert.equal(written.maxUsd, null); assert.equal(written.offers[1].ratePerHour, null);
+  const reloaded = validateCloudConfig(written);
+  assert.equal(reloaded.agentbusRepo, null); assert.equal(reloaded.agentbusRef, null); assert.equal(reloaded.maxUsd, null); assert.equal(reloaded.maxHours, 3);
+  assert.deepEqual(validateCloudConfig(reloaded), reloaded, 'stable across any number of round trips');
+  assert.throws(() => validateCloudConfig({ ...written, agentbusRepo: 'git@x:y' }), /https/, 'a real bad value is still refused');
+  // the configured 81559 MiB is shown, not the catalog's 80 GB = 81920 MiB
+  const w = await world(t);
+  w.cloudConfig.offers[0].gpuMemoryMiB = 81559;
+  // the requester sees the provisioner's offers as of its last poll
+  const offer = await until('configured memory in the offer', async () => { const o = (await w.requester({ op: 'cloud', action: 'status' })).provisioners?.[0]?.offers?.[0]; return o?.gpuMemoryMiB === 81559 && o; }, 10000);
+  assert.equal(offer.gpuMemoryMiB, 81559); assert.equal(offer.memorySource, 'config');
+});
