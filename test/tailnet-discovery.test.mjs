@@ -146,11 +146,15 @@ test('a member found on the tailnet is peered without any config, learned back b
   // the daemon re-reads config.json every poll for static peers: discovery must leave it untouched
   const configFile = path.join(studio.config.dir, 'config.json'), before = JSON.stringify({ hostId: studio.config.hostId, name: 'studio', port: 0, bind: '127.0.0.1', tailnetPort: laptop.d.port });
   fs.writeFileSync(configFile, before);
-  await studio.d.refresh();
-  assert.equal(fs.readFileSync(configFile, 'utf8'), before, 'a discovered member is never written to config');
-  const peer = studio.d.peers.get(laptop.config.hostId);
+  await studio.d.refresh(); // fires the scan detached
+  await studio.d.discovery.scan(); // joins it
+  let peer = studio.d.peers.get(laptop.config.hostId);
   assert(peer, 'the laptop is in the peer table'); assert.equal(peer.discovered, true); assert.equal(peer.learned, true); assert.equal(peer.static, undefined);
-  assert.equal(peer.name, 'laptop'); assert.equal(peer.error, undefined, 'inventoried in the same poll');
+  assert.equal(peer.name, 'laptop'); assert.equal(peer.checkedAt, 0, 'inventoried on the next poll, not by the scan');
+  await studio.d.refresh(); await studio.d.discovery.scan();
+  peer = studio.d.peers.get(laptop.config.hostId);
+  assert.equal(peer.error, undefined); assert(peer.checkedAt > 0);
+  assert.equal(fs.readFileSync(configFile, 'utf8'), before, 'a discovered member is never written to config');
   const status = await h.local('studio', { op: 'status' });
   assert.equal(status.tailnet.enabled, true); assert.equal(status.tailnet.found, 1); assert.equal(status.tailnet.port, laptop.d.port);
   assert.equal(status.peers.find((p) => p.hostId === laptop.config.hostId)?.discovered, true);
@@ -176,16 +180,40 @@ test('another group\'s daemon, a non-agentbus listener and a closed port are cac
   for (const [label, port] of [['wrong key', stranger.d.port], ['not agentbus', plain.address().port], ['nothing listening', closedPort]]) {
     const h = await daemons(t, { tailnetFor: () => ({ status: () => fakeStatus([node('127.0.0.1')]), scanEveryMs: 0, probeTimeoutMs: 2000 }) });
     const studio = await start(h, 'studio', { tailnetPort: port });
-    await studio.d.refresh();
+    await studio.d.refresh(); await studio.d.discovery.scan();
     assert.equal(studio.d.peers.size, 0, label);
     const snap = (await h.local('studio', { op: 'status' })).tailnet;
     assert.equal(snap.negatives, 1, label); assert.equal(snap.found, 0, label);
     assert(h.logs.studio.every((l) => !l.includes('127.0.0.1')), `${label}: ${h.logs.studio.join(' | ')}`);
-    await studio.d.refresh();
+    await studio.d.refresh(); await studio.d.discovery.scan();
     const again = (await h.local('studio', { op: 'status' })).tailnet;
     assert.equal(again.scans, 2, label); assert.equal(again.probed, 0, `${label}: not probed again within the ttl`);
   }
   assert.equal(stranger.d.peers.size, 0, 'the other group learned nothing from a failed handshake');
+});
+
+test('the peer poll never waits on a scan: a node that swallows the port stalls only the probe, and an in-flight scan is joined', async (t) => {
+  // a listener that accepts and never answers: what a firewall that drops tcp 47800 looks like, minus the syn retries
+  const held = new Set(), blackhole = net.createServer((s) => held.add(s)); blackhole.listen(0, '127.0.0.1'); await new Promise((r) => blackhole.once('listening', r));
+  t.after(() => { for (const s of held) s.destroy(); blackhole.close(); });
+  const h = await daemons(t, { tailnetFor: (name) => name === 'studio' ? { status: () => fakeStatus([node('127.0.0.1')]), scanEveryMs: 0, probeTimeoutMs: 20000 } : false });
+  const laptop = await start(h, 'laptop');
+  const studio = await start(h, 'studio', { tailnetPort: blackhole.address().port });
+  studio.d.discover({ txt: { v: '1', id: laptop.config.hostId }, port: laptop.d.port, addresses: ['127.0.0.1'] });
+  const t0 = Date.now(); await studio.d.refresh(); const took = Date.now() - t0;
+  assert(took < 2000, `refresh took ${took}ms while a probe hangs`);
+  const peer = studio.d.peers.get(laptop.config.hostId);
+  assert.equal(peer.error, undefined); assert(peer.checkedAt > 0, 'the existing peer was inventoried in that poll');
+  assert.equal(held.size, 1, 'exactly one probe in flight');
+  await studio.d.refresh();
+  assert.equal(held.size, 1, 'the second poll joined the running scan instead of starting another');
+  assert.equal((await h.local('studio', { op: 'status' })).tailnet.scans, 1);
+  // a hanging `tailscale status` (async) stalls the poll just as little
+  let release; const slow = await daemons(t, { tailnetFor: () => ({ status: () => new Promise((r) => { release = () => r(fakeStatus([])); }), scanEveryMs: 0 }) });
+  const s2 = await start(slow, 'studio');
+  const t1 = Date.now(); await s2.d.refresh(); assert(Date.now() - t1 < 2000);
+  release(); await s2.d.discovery.scan();
+  assert.equal((await slow.local('studio', { op: 'status' })).tailnet.scans, 1);
 });
 
 async function start(h, name, extra, options) { return h.start(name, extra, options); }
