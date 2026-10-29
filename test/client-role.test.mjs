@@ -18,7 +18,7 @@ const usage = { current: () => ({ providers: { claude: { status: 'ok', observedA
 async function pair(t, { bRole } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-client-')), key = crypto.randomBytes(32);
   const mk = (name, extra) => { const dir = path.join(root, name, 'lan'); fs.mkdirSync(dir, { recursive: true }); return { hostId: crypto.randomUUID(), name, key, dir, port: 0, bind: '127.0.0.1', ...extra }; };
-  const common = { mdns: false, allowLoopback: true, pollMs: 60000, log: () => {}, cloud: false, deliverLocal: async () => ({ ok: true, delivery: 'accepted' }) };
+  const common = { mdns: false, tailnet: false, allowLoopback: true, pollMs: 60000, log: () => {}, cloud: false, deliverLocal: async () => ({ ok: true, delivery: 'accepted' }) };
   const ca = mk('owner', { role: 'host' }), cb = mk('laptop', bRole ? { role: bRole } : {});
   const aAgent = agent('owner-worker'), bAgent = agent('laptop-worker');
   const A = await startLan({ ...common, config: ca, presence: sample('away'), usage, listLocal: () => [aAgent] });

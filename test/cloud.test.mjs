@@ -19,7 +19,7 @@ const until = async (what, fn, ms = 20000) => { const end = Date.now() + ms; for
 // provisioner (studio), requester (laptop) and a fake runpod whose createPod boots a third daemon from the pod env.
 async function world(t, { idleMinutes = 10, relay = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-cloud-')), key = crypto.randomBytes(32);
-  const common = { mdns: false, allowLoopback: true, pollMs: 200, log: () => {}, deliverLocal: async () => ({ ok: true, delivery: 'accepted' }) };
+  const common = { mdns: false, tailnet: false, allowLoopback: true, pollMs: 200, log: () => {}, deliverLocal: async () => ({ ok: true, delivery: 'accepted' }) };
   const mk = (name, extra) => { const dir = path.join(root, name, 'lan'); fs.mkdirSync(dir, { recursive: true }); return { hostId: crypto.randomUUID(), name, key, dir, port: 0, bind: '127.0.0.1', peers: [], ...extra }; };
   const pods = new Map(), created = [], minted = [], revoked = [];
   const tailscale = { async mintAuthKey(o) { const k = { key: `tskey-auth-pod${minted.length + 1}-SECRET`, id: `kid${minted.length + 1}`, opts: o }; minted.push(k); return k; }, async revokeKey(id) { revoked.push(id); } };

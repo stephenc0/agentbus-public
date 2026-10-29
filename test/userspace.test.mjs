@@ -71,7 +71,7 @@ test('tailscale ip -4 parsing keeps only overlay addresses; userspace config nee
 test('a userspace-tailscale pod joins over socks5, the owner dials it back at its advertised tailscale ip, and blobs flow', async (t) => {
   const root = tmp(t), key = crypto.randomBytes(32);
   const mk = (name, extra) => { const dir = path.join(root, name, 'lan'); fs.mkdirSync(dir, { recursive: true }); return { hostId: crypto.randomUUID(), name, key, dir, port: 0, bind: '127.0.0.1', peers: [], ...extra }; };
-  const common = { mdns: false, allowLoopback: true, pollMs: 60000, log: () => {}, deliverLocal: async () => ({ ok: true, delivery: 'accepted' }) };
+  const common = { mdns: false, tailnet: false, allowLoopback: true, pollMs: 60000, log: () => {}, deliverLocal: async () => ({ ok: true, delivery: 'accepted' }) };
   let A, B;
   // one fake tailnet: owner at 100.100.0.1, pod at 100.101.0.2; both reach each other only through their proxies
   const net1 = await fakeTailscaled(t, () => ({ [`100.100.0.1:${A.port}`]: A.port, [`100.101.0.2:${B.port}`]: B.port }));

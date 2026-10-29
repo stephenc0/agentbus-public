@@ -71,6 +71,9 @@ if the session started before agentbus was updated, the `cloud_*` tools aren't l
   one poll. once it authenticates, the member saves it as a static peer in its own lan config.
 - **after that the provisioner is dialed directly.** the introducing host can be off, rebooting or gaming, and it is in no
   data or control path to the provisioner or the pod. a test covers exactly that.
+- **tailnet discovery finds it too.** a member on this build probes its tailnet's online nodes on the agentbus port and
+  peers with the provisioner (and live pods) that way as well, with no introducing host in between. see
+  [README: tailnet discovery](../README.md#tailnet-discovery-every-member-finds-every-member).
 - the requester's daemon and the provisioner must run this build. so must the introducing host, for the one-time
   introduction only. the pod uses the image.
 

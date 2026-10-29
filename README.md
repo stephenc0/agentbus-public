@@ -360,6 +360,34 @@ long-lived peer, open the admin console machines page and choose disable key exp
 multicast, and configures the owner as a static peer. the owner learns the joiner's address from its
 first authenticated request and dials back. no manual peer entry is needed on the owner.
 
+### tailnet discovery (every member finds every member)
+
+mdns never crosses tailscale, so a wan member used to peer only with the hosts in its join token, plus an introduced
+provisioner and live pods: two laptops that joined through the same host never met. now every daemon also reads its own
+node's view of the tailnet (`tailscale status --json`) once a minute and probes the online nodes on the agentbus port
+(47800) with the ordinary tls-psk inventory request. a node that holds the group key becomes a learned peer, exactly like
+a dial-back: nothing is written to config, and the key stays the only admission test. the probed side learns the prober
+and dials back, so one scan connects both ways. roles don't change: a discovered client still shares nothing and accepts
+nothing.
+
+what gets probed, and how politely:
+- only online nodes owned by your tailnet. devices shared across tailnet boundaries, in either direction, are skipped
+  unless `"tailnetIncludeShared": true`. offline nodes and this machine never are. at most 256 nodes per scan.
+- four probes at a time, five seconds each. a node that isn't agentbus, or runs another group, isn't tried again for
+  15 minutes. a member that's already a peer by mdns, config or dial-back isn't probed at all.
+- addresses and names of nodes that didn't authenticate are never logged, stored or shown; `lan status` reports counts
+  only (`tailnet`: scans, candidates, probed, found, negatives). a member on a build before this feature is named in the
+  log so you can upgrade it: it proves the key but can't answer an anonymous probe.
+- the tailscale cli is found on PATH, in the macos app bundle, under program files on windows, or in /usr/bin and
+  /usr/local/bin. without it (or with tailscaled down) discovery is a no-op, logged once. userspace-tailscale pods read
+  status the same way and dial out through their socks5 proxy.
+
+it is **on by default**: the point is that joiners need no config to find every member, the cost is one tcp connect per
+tailnet node per quarter hour, and the group key already decides who gets in. `agentbus lan discovery off` turns it off
+(`"tailnetDiscovery": false`), `--port` changes the probed port (`"tailnetPort"`), `--include-shared` opts shared nodes
+in; restart the daemon after a change. the earlier paths all still work: mdns on the lan, static peers from tokens,
+learned dial-backs, provisioner introductions and live pod announcements.
+
 moving files: `agentbus blob put|get|stat|purge` streams over the same tls-psk link straight to
 the storage owner's `tasks/<uuid>/{in,out}`. it never mirrors the share and doesn't use smb.
 uploads and downloads resume and are sha256 verified on both ends. the workflow for jobs is in
@@ -392,7 +420,8 @@ exactly as before. `lan doctor` checks `tailscale ip -4` and the socks5 listener
 `lan forget-host` now also removes a dead learned peer from the live table, not only from history.
 
 other commands: `lan peer list|add|remove` (static peers, picked up without a restart), `lan doctor`
-(reachability, authentication, reach back, a 4 MiB blob round trip), `lan init --peer ... --no-mdns`.
+(reachability, authentication, reach back, a 4 MiB blob round trip), `lan discovery [on|off]` (tailnet
+discovery, see above), `lan init --peer ... --no-mdns`.
 
 ## one sms authority across the lan
 

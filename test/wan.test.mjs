@@ -18,7 +18,7 @@ async function wanPair(t, { storage = true } = {}) {
   const root = tmp(t), key = crypto.randomBytes(32);
   const mk = (name) => { const dir = path.join(root, name, 'lan'); fs.mkdirSync(dir, { recursive: true }); return { hostId: crypto.randomUUID(), name, key, dir, port: 0, bind: '127.0.0.1', peers: [] }; };
   const ca = mk('a'), cb = mk('b');
-  const common = { mdns: false, allowLoopback: true, pollMs: 60000, log: () => {}, deliverLocal: async () => ({ ok: true, delivery: 'accepted' }) };
+  const common = { mdns: false, tailnet: false, allowLoopback: true, pollMs: 60000, log: () => {}, deliverLocal: async () => ({ ok: true, delivery: 'accepted' }) };
   const A = await startLan({ ...common, config: ca, listLocal: () => [agent('owner-worker')] });
   fs.writeFileSync(path.join(cb.dir, 'config.json'), JSON.stringify({ hostId: cb.hostId, name: 'b', port: 0, bind: '127.0.0.1', peers: [{ hostId: ca.hostId, address: '127.0.0.1', port: A.port, name: 'a' }] }));
   const B = await startLan({ ...common, config: cb, listLocal: () => [agent('remote-client')] });

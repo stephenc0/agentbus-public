@@ -20,7 +20,7 @@ async function pair(t, options = {}) {
   const ca = config('a'), cb = config('b');
   if (options.sms) { ca.smsPrimary = ca.hostId; cb.smsPrimary = ca.hostId; }
   let liveB = [b];
-  const common = { mdns: false, allowLoopback: true, pollMs: 60000, log: () => {} };
+  const common = { mdns: false, tailnet: false, allowLoopback: true, pollMs: 60000, log: () => {} };
   const A = await startLan({ ...common, ...options, presence: options.presenceFor?.('a') ?? null, config: ca, listLocal: () => [a], deliverLocal: async (...args) => { receivedA.push(args); return { ok: true, delivery: 'accepted' }; } });
   const B = await startLan({ ...common, ...options, presence: options.presenceFor?.('b') ?? null, config: cb, listLocal: () => liveB, deliverLocal: async (...args) => { receivedB.push(args); return { ok: true, delivery: 'queued', recovery_file: '/secret/file' }; } });
   const service = (cfg, daemon) => ({ txt: { v: '1', id: cfg.hostId }, name: 'untrusted-name', port: daemon.port, addresses: ['127.0.0.1'] });

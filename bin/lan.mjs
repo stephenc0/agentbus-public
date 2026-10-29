@@ -1,4 +1,4 @@
-import { initLan, loadLan, localLanRequest, updateLanConfig, validatePeers, UUID } from '../lib/lan.mjs';
+import { initLan, loadLan, localLanRequest, updateLanConfig, validatePeers, UUID, DEFAULT_WAN_PORT } from '../lib/lan.mjs';
 import { startLan } from '../lib/lan-daemon.mjs';
 import { listAgents, deliverToClaude, deliverToCodex } from '../lib/core.mjs';
 
@@ -62,6 +62,23 @@ export async function runLan(args) {
     if (!['host', 'client'].includes(role) || args.length) throw Error('usage: agentbus lan role [host|client]');
     const next = updateLanConfig(undefined, (c) => { const out = { ...c }; if (role === 'host') out.role = 'host'; else delete out.role; return out; });
     console.log(JSON.stringify({ role: next.role === 'host' ? 'host' : 'client', restart: 'run agentbus lan stop, then agentbus lan install: the daemon reads its role at start' }, null, 2));
+  } else if (command === 'discovery') {
+    // tailnet discovery: this daemon probes the online nodes of its own tailnet on the agentbus port and peers with the
+    // ones that hold the group key. on by default; the daemon re-reads nothing here, so restart it after a change.
+    const port = option('--port'), includeShared = has('--include-shared') ? true : has('--own-tailnet') ? false : undefined;
+    const mode = args.shift();
+    if (![undefined, 'on', 'off'].includes(mode) || args.length) throw Error('usage: agentbus lan discovery [on|off] [--port 47800] [--include-shared|--own-tailnet]');
+    if (port !== undefined && !/^\d{1,5}$/.test(port)) throw Error('--port must be 1..65535');
+    const show = (c) => ({ enabled: c.tailnetDiscovery !== false, port: c.tailnetPort || DEFAULT_WAN_PORT, includeShared: c.tailnetIncludeShared === true });
+    if (!mode && port === undefined && includeShared === undefined) { console.log(JSON.stringify(show(loadLan()), null, 2)); return; }
+    const next = updateLanConfig(undefined, (c) => {
+      const out = { ...c };
+      if (mode === 'off') out.tailnetDiscovery = false; else if (mode === 'on') delete out.tailnetDiscovery;
+      if (port !== undefined) { if (Number(port) === DEFAULT_WAN_PORT) delete out.tailnetPort; else out.tailnetPort = Number(port); }
+      if (includeShared === true) out.tailnetIncludeShared = true; else if (includeShared === false) delete out.tailnetIncludeShared;
+      return out;
+    });
+    console.log(JSON.stringify({ ...show(next), restart: 'run agentbus lan stop, then agentbus lan install: the daemon reads these at start' }, null, 2));
   } else if (command === 'cost') {
     // the price this host advertises next to its gpu memory. owned hardware: --cost-per-hour 0 --billing owned. --clear: unknown.
     const clear = has('--clear'), cost = costArgs();
@@ -92,5 +109,5 @@ export async function runLan(args) {
     let stopping = false;
     const stop = async () => { if (stopping) return; stopping = true; await daemon.close(); };
     process.on('SIGINT', stop); process.on('SIGTERM', stop);
-  } else throw Error('usage: agentbus lan init [--name name] [--key-file file] [--port port] [--bind IPv4] [--sms-primary self|host-id] [--mdns-interface adapter|IPv4] [--peer HOST_UUID@ADDR:PORT[=name]] [--no-mdns] | lan join TOKEN [--userspace-tailscale] [--host] | lan role [host|client] | lan cost --cost-per-hour N --billing label|--clear | lan invite --repo URL --peer NAME=ADDR[:PORT] | lan peer list|add|remove | lan doctor | lan serve | lan status | lan forget-host <uuid> | lan install | lan stop');
+  } else throw Error('usage: agentbus lan init [--name name] [--key-file file] [--port port] [--bind IPv4] [--sms-primary self|host-id] [--mdns-interface adapter|IPv4] [--peer HOST_UUID@ADDR:PORT[=name]] [--no-mdns] | lan join TOKEN [--userspace-tailscale] [--host] | lan role [host|client] | lan discovery [on|off] [--port N] [--include-shared|--own-tailnet] | lan cost --cost-per-hour N --billing label|--clear | lan invite --repo URL --peer NAME=ADDR[:PORT] | lan peer list|add|remove | lan doctor | lan serve | lan status | lan forget-host <uuid> | lan install | lan stop');
 }
