@@ -99,10 +99,11 @@ none of this can be scripted from here: each step needs an account, a payment me
    - **size: 28.2 gb**, measured on the pinned build (agentbus 0.6.0). the smoke steps assert esm torch
      2.11.0+cu130 (cuda 13.0), boltz torch 2.8.0+cu128 (cuda 12.8) with cuequivariance 0.6.1, and colabfold jax 0.10.1,
      and pip check is clean in both venvs. the pull dominates cold start.
-   - **cold start: 15 minutes, provisional and unmeasured.** the estimate is a 28.2 gb pull at a few hundred mb/s, plus
-     layer extraction, plus boot (agentbus fetch and npm ci on the first pod per ref, then tailscale, join and doctor).
-     replace it with the first measured cold start (it appears in `cloud_status` progress). later pods on a machine that
-     already has the image are much faster.
+   - **cold start: 21 minutes, measured** on the first real pod (h100, US-NE-1, a machine without the image cached). that
+     covers pod creation to a live host peer, the ~15 gb compressed pull and extraction included. the provisioner's checks
+     then took seconds: a 4 MiB blob round trip in 2.4 s. a machine that already has the image starts much faster. offers
+     use `coldStartMinutes: 22`, and the provisioner waits 3x that before giving up. the pod's tailscale key outlives
+     that window.
    - no secrets are in it.
 7. **template (optional).** a runpod pod template with that image, a 60 gb container disk, no exposed ports, and these
    env vars:
