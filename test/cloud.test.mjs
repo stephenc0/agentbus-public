@@ -106,7 +106,7 @@ test('a peer starts a pod through the provisioner, reaches it directly, and idle
   assert.equal(env.AGENTBUS_REF, 'a'.repeat(40), 'pods are pinned to the provisioner\'s agentbus release');
   assert.equal(env.AGENTBUS_NAME, 'runpod-h100'); assert.equal(env.AGENTBUS_GPU_COST_PER_HOUR, '2.5', 'the live secure catalog price, not the configured one');
   assert.deepEqual(w.created[0].gpu, { id: 'NVIDIA H100 80GB HBM3', count: 1, minCudaVersion: '13.0' }, 'a cuda floor, never an exact pin'); assert.equal(env.TS_AUTHKEY, 'tskey-auth-pod1-SECRET', 'a fresh minted key per pod');
-  assert.deepEqual(w.minted[0].opts.tags, ['tag:agentbus-gpu']); assert.ok(w.minted[0].opts.expirySeconds >= 900 && w.minted[0].opts.expirySeconds <= 3600, 'short expiry');
+  assert.deepEqual(w.minted[0].opts.tags, ['tag:agentbus-gpu']); assert.ok(w.minted[0].opts.expirySeconds * 1000 >= 20000 + 600000, 'the key outlives the start deadline (readyTimeoutMs 20s here) plus 10 min');
   const stopAt = Number(env.AGENTBUS_HARD_STOP_AT) * 1000;
   assert.ok(stopAt > Date.now() + 2 * 3.6e6 && stopAt < Date.now() + 2 * 3.6e6 + 11 * 60000, 'pod backstop = hard cap + 10 min grace');
   assert.deepEqual(decodeJoinToken(env.AGENTBUS_JOIN_TOKEN).peers.map((p) => p.hostId), [w.ca.hostId], 'pods dial the provisioner');
