@@ -267,6 +267,12 @@ feature, so an old peer's presence and usage are dropped. host history records w
 count toward presence coverage, so a client leaving never makes `any host active` unknown. `agentbus lan role` prints
 this machine's role.
 
+known hosts (`lan status` and the copy shared with peers) are the persisted registry plus, while connected, every
+ephemeral peer such as a cloud pod. those entries carry `ephemeral: true`, the time of their last authentication and the
+link kind. they are never written to disk, and they disappear once the daemon drops the peer: terminated, or silent for
+a minute. a dashboard can draw a live pod's edges like any other host's, and a terminated pod never becomes a presence
+gap.
+
 ### host cost (pick a host by fit and price)
 
 every host may advertise what an hour of its gpu costs, set by its owner in `~/.agentbus/lan/config.json`:

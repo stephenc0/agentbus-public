@@ -75,6 +75,10 @@ test('role persists in host history and travels with shared known hosts; anythin
   const build = { features: [SHARED_KNOWN_HOSTS_FEATURE] };
   const shared = sanitizeSharedKnownHosts({ build, knownHosts: shareKnownHosts([{ hostId: id, name: 'gpubox', lastAuthenticatedAt: 5, role: 'host' }, { hostId: id, name: 'x', lastAuthenticatedAt: 5, role: 'admin' }]) });
   assert.deepEqual(shared.map((h) => h.role), ['host', undefined]);
+  // a live ephemeral entry keeps its marker across the wire; anything but true is dropped
+  const eph = sanitizeSharedKnownHosts({ build, knownHosts: shareKnownHosts([{ hostId: id, name: 'pod', lastAuthenticatedAt: 5, role: 'host', link: 'wan', ephemeral: true }, { hostId: id, name: 'p2', lastAuthenticatedAt: 5, ephemeral: 'yes' }]) });
+  assert.deepEqual(eph[0], { hostId: id, name: 'pod', lastAuthenticatedAt: 5, link: 'wan', role: 'host', ephemeral: true });
+  assert.equal('ephemeral' in eph[1], false);
 });
 
 test('lan join joins as a client unless --host (or AGENTBUS_ROLE=host from a host invite); the role is validated', async (t) => {
