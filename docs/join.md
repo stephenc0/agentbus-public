@@ -69,6 +69,10 @@ you can also set the environment variables `AGENTBUS_JOIN_TOKEN` and `AGENTBUS_N
 `node bin/agentbus.mjs lan join`. this writes owner only config under `~/.agentbus/lan`, binds only
 to this machine's tailscale address, disables lan multicast, and adds the peer. it doesn't print the key.
 
+`AGENTBUS_PEER` only has to name one reachable host: once the daemon runs, this machine finds the group's other
+members on the tailnet by itself (it probes online tailnet nodes on the agentbus port with the group key, and only
+nodes holding that key become peers). nothing from that is written to config.
+
 ## 5. start the daemon, now and at every login
 
 ```sh
@@ -100,6 +104,9 @@ every line must say `ok`:
 - **blob roundtrip:** a 4 MiB upload and download to the peer's task storage works.
 
 if a line fails, follow its `fix:` hint. if it still fails, report the doctor output to the human.
+
+`node bin/agentbus.mjs lan status` lists every member this machine reached under `peers`, including the ones
+it found on the tailnet on its own (`"discovered": true`); `tailnet` holds the discovery counts.
 
 macos: if commands run from claude code fail with `EHOSTUNREACH` or "no route to host" while
 `tailscale ping` works, macos local network privacy is blocking the app that launched them. the human

@@ -87,7 +87,15 @@ the internet: agentbus binds only to lan and tailscale (100.64.0.0/10) addresses
 - **tailnet invite or device share:** invite them as a user, or share your device with them and have them share theirs
   back. reachability must work in **both** directions: the owner dials the joiner back.
 
-if your tailnet policy is not the default allow-all, allow tcp 47800 both ways between your hosts and the joiners.
+if your tailnet policy is not the default allow-all, allow tcp 47800 both ways between all members, not only toward
+the hosts named in invites: members find each other (next paragraph).
+
+**everyone meets everyone.** a joiner's token names only the hosts you put in it, but once its daemon runs it reads its
+own tailnet node list (`tailscale status --json`) and probes the online nodes on port 47800 with the group key. members
+answer and are peered, both ways, with nothing written to config; other devices are left alone for 15 minutes at a time.
+so a laptop that joined through the studio also reaches the gpubox and every other member on the tailnet, without a new
+invite. it's on by default; `agentbus lan discovery off` disables it. details:
+[README: tailnet discovery](../README.md#tailnet-discovery-every-member-finds-every-member).
 
 **make the invite:**
 
