@@ -112,6 +112,13 @@ test('a peer starts a pod through the provisioner, reaches it directly, and idle
   assert.deepEqual(decodeJoinToken(env.AGENTBUS_JOIN_TOKEN).peers.map((p) => p.hostId), [w.ca.hostId], 'pods dial the provisioner');
   const live = await until('pod live', async () => { const o = await offerOf(); return o?.state === 'live' && o.fromHere?.authenticated && o.fromHere.reachBack && o; }, 30000);
   assert.equal(live.startedBy.hostName, 'laptop'); assert.equal(live.startedBy.agentId, w.remoteAgent.id);
+  // while live, the pod is in the provisioner's known-hosts view (status and what it shares), marked ephemeral, never on disk
+  const liveView = await localLanRequest({ op: 'status' }, { busDir: path.join(w.root, 'studio') });
+  const podKnown = liveView.knownHosts.find((h) => h.hostId === live.pod.hostId);
+  assert.equal(podKnown?.ephemeral, true); assert.equal(podKnown.role, 'host'); assert.equal(podKnown.name, 'runpod-h100'); assert.ok(podKnown.link);
+  assert.ok(Date.now() - podKnown.lastAuthenticatedAt < 30000);
+  assert.ok(!fs.readFileSync(path.join(w.root, 'studio', 'lan', 'known-hosts.json'), 'utf8').includes(live.pod.hostId), 'not persisted');
+  await until('requester sees the pod in the provisioner\'s shared known hosts', () => (w.C.peers.get(w.ca.hostId)?.knownHosts || []).some((h) => h.hostId === live.pod.hostId && h.ephemeral === true));
   assert.ok(live.capUntil - Date.now() <= 2 * 3.6e6 + 1000, '$5 at $2.5/h caps the pod at 2 h');
   assert.ok(live.progress.some((l) => /blob roundtrip/.test(l)), 'lan doctor checks ran before live');
   assert.ok(live.progress.some((l) => /agentbus build: \w{8} on both/.test(l)), 'the pod build is compared with the provisioner build');
@@ -151,7 +158,7 @@ test('a peer starts a pod through the provisioner, reaches it directly, and idle
   assert.deepEqual(stopped.keptTasks, []);
   await until('requester to drop the dead pod', () => !w.C.peers.get(live.pod.hostId) || w.C.peers.get(live.pod.hostId).error);
   const known = await localLanRequest({ op: 'status' }, { busDir: path.join(w.root, 'studio') });
-  assert.equal(known.knownHosts.some((h) => h.hostId === live.pod.hostId), false, 'an ephemeral pod never enters host history');
+  assert.equal(known.knownHosts.some((h) => h.hostId === live.pod.hostId), false, 'a terminated ephemeral pod leaves the known-hosts view and never entered host history');
 });
 
 test('the hard cap terminates a busy pod; cloud_down with force stops it and keeps unfetched results on the volume', { timeout: 90000 }, async (t) => {

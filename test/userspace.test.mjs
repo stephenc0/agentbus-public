@@ -95,9 +95,12 @@ test('a userspace-tailscale pod joins over socks5, the owner dials it back at it
   assert.equal(pod.capabilities.gpu_cost_per_hour, 2.89); assert.equal(pod.capabilities.billing, 'runpod secure cloud on-demand');
   await B.refresh();
   assert.equal(B.peers.get(ca.hostId).reachBack, true, 'lan doctor reach back passes');
-  // ephemeral: never written to the owner's host history, so a terminated pod is not expected by presence
+  // ephemeral: listed while connected (marked ephemeral), but never written to the owner's host history,
+  // so a terminated pod is not expected by presence
   const status = await localLanRequest({ op: 'status' }, { busDir: path.join(root, 'owner') });
-  assert.equal(status.knownHosts.some((h) => h.hostId === cb.hostId), false);
+  assert.equal(status.knownHosts.find((h) => h.hostId === cb.hostId)?.ephemeral, true);
+  const registry = path.join(root, 'owner', 'lan', 'known-hosts.json');
+  assert.ok(!fs.existsSync(registry) || !fs.readFileSync(registry, 'utf8').includes(cb.hostId), 'not persisted');
   // pod owns task storage on its volume; the owner pulls results through socks5
   const share = path.join(root, 'volume', 'agentbus-tasks', cb.hostId); fs.mkdirSync(share, { recursive: true });
   registerStorage({ name: 'pod tasks', localPath: share, uri: 'smb://pod/agentbus-tasks', ownerHostId: cb.hostId, create: true }, path.join(root, 'pod'));
