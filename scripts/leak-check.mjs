@@ -2,7 +2,7 @@
 // Scan the tracked tree, the commits about to be pushed and the committer identity for secrets and owner identifiers.
 // Refuses on any finding. Meant as a pre-push hook in a checkout of a public repo:
 //
-//   printf '#!/bin/sh\nexec node scripts/leak-check.mjs --pre-push\n' > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+//   printf '#!/bin/sh\nexec node scripts/leak-check.mjs --pre-push "$@"\n' > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
 //   node scripts/leak-check.mjs            # by hand: tree + identity
 //
 // Owner-specific identifiers belong in a deny list OUTSIDE the repo (one regex per line, # comments):
@@ -61,13 +61,16 @@ if (!ident[0] || !ident[1] || /\.local$/i.test(ident[1]) || patterns.some(([, re
   findings.push(`git identity "${ident[0]} <${ident[1]}>" is unset or identifying. set a public one: git config user.name NAME && git config user.email ID+NAME@users.noreply.github.com`);
 }
 
-// 3. pre-push: every commit being pushed (authors, messages, diffs). git feeds "<local ref> <local sha> <remote ref> <remote sha>" lines
+// 3. pre-push: every commit the target remote doesn't already have (authors, messages, diffs), even ones other remotes
+// hold, so history from a private remote sharing this .git can't ride along. git passes the remote name as the first
+// argument and feeds "<local ref> <local sha> <remote ref> <remote sha>" lines on stdin
 if (has('--pre-push')) {
   const zero = /^0+$/;
+  const remoteName = args.find((a) => !a.startsWith('--') && args[args.indexOf(a) - 1] !== '--denylist');
   for (const line of fs.readFileSync(0, 'utf8').split('\n').filter(Boolean)) {
     const [, local, , remote] = line.split(' ');
     if (zero.test(local)) continue; // a delete
-    const range = zero.test(remote) ? [local, '--not', '--remotes'] : [`${remote}..${local}`];
+    const range = [local, '--not', remoteName ? `--remotes=${remoteName}` : '--remotes', ...(zero.test(remote) ? [] : [remote])];
     for (const sha of git('rev-list', ...range).split('\n').filter(Boolean)) {
       scanText(`commit ${sha.slice(0, 7)} header`, git('show', '-s', '--format=%an <%ae>%n%cn <%ce>%n%B', sha));
       const added = git('show', '--format=', '--unified=0', '--no-color', sha, '--', '.', ':!package-lock.json', ':!**/package-lock.json').split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++')).join('\n');
