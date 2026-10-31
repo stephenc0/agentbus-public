@@ -12,6 +12,7 @@ import { readLaunch, writeLaunch, isCorrupt, claudeLaunchArgs, claudeJobId, desk
 
 import { codexThreadParams, verifyNativePermissions } from '../lib/launch-permissions.mjs';
 import { claudeJobs, matchClaudeJob, claudeJobExited, stopClaudeJob, terminateChild, claudeJobLogs, classifyClaudeLog } from '../lib/native-runtime.mjs';
+import { diagnoseTrustFailure } from '../lib/claude-trust.mjs';
 
 const file = process.argv[2], busDir = path.dirname(path.dirname(file));
 let record = readLaunch(file), child, bridge, stopping = false, stopRequested = false, launcherDone = false, checking = false, finalizing = false, finishPromise, nativeMonitor, cleanupRpc = () => {};
@@ -107,7 +108,16 @@ try {
       if (nativeJobId) update({ nativeJobId });
       if (stopRequested && nativeJobId) { await stop(); return; }
       if (record.state === 'uncertain') return;
-      if (code !== 0 && !nativeJobId) { update({ state: /workspace.*not trusted/i.test(output) ? 'failed' : 'uncertain', error: output.trim().slice(-2000) || `launcher exited ${code}; inspect for an unregistered native job` }); clearInterval(control); return; }
+      if (code !== 0 && !nativeJobId) {
+        clearInterval(control);
+        if (!/workspace.*not trusted/i.test(output)) { update({ state: 'uncertain', error: output.trim().slice(-2000) || `launcher exited ${code}; inspect for an unregistered native job` }); return; }
+        // claude's trust refusal is authoritative but says nothing about *whose* trust it checked. a daemon started
+        // headless (windows boot task in session 0) runs in a profile that never accepted trust or logged in; read the
+        // same state claude read and say which case this is, so the caller does not go accept trust in the wrong account.
+        let diagnosis = null; try { diagnosis = await Promise.race([diagnoseTrustFailure(request.cwd), new Promise((r) => setTimeout(() => r(null), 10000))]); } catch {}
+        update({ state: 'failed', error: `${output.trim().slice(-700)}${diagnosis ? `\n${diagnosis.summary}` : ''}`.slice(-2000), ...(diagnosis ? { trustDiagnosis: diagnosis.kind, launchContext: diagnosis.context, claudeTrust: { configFile: diagnosis.trust.configFile, configExists: diagnosis.trust.configExists, configReadable: diagnosis.trust.configReadable, credentials: diagnosis.trust.credentials, trusted: diagnosis.trust.trusted, trustedRoot: diagnosis.trust.trustedRoot } } : {}) });
+        return;
+      }
       if (!nativeJobId) { update({ state: 'uncertain', error: 'launcher returned without a recognized native job id' }); clearInterval(control); return; }
       update({ state: 'awaiting_registration', note: 'native background job created; waiting for native inventory' });
       // A job the native inventory calls "working" that never registers a session may be crash-looping.
