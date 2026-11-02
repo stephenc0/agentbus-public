@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { createLauncher, validateLaunch, claudeLaunchArgs, claudeJobId, desktopLaunch, launchEnvironment, readLaunch, writeLaunch, activeSessionCount, launcherCapabilities } from '../lib/session-launch.mjs';
+import { createLauncher, validateLaunch, claudeLaunchArgs, claudeJobId, desktopLaunch, launchEnvironment, claimEnvironment, COMPUTE_CLAIM_ENV, readLaunch, writeLaunch, activeSessionCount, launcherCapabilities } from '../lib/session-launch.mjs';
 import { sanitizeLaunching } from '../lib/lan-daemon.mjs';
 
 function fixture(t) {
@@ -109,6 +109,20 @@ test('native desktop/background commands preserve prompt as data, and sessions n
   const win = desktopLaunch(desktop, 'win32'); assert(!win.args.join(' ').includes(desktop.prompt)); assert.equal(new URL(win.env.AGENTBUS_DESKTOP_URL).searchParams.get('folder'), desktop.cwd);
   assert.deepEqual(launchEnvironment({ PATH: 'path', CLAUDE_CODE_MESSAGING_TOKEN: 'secret', CLAUDE_CODE_MESSAGING_SOCKET: 'socket', CLAUDECODE: '1', CODEX_THREAD_ID: 'old', AGENTBUS_SELF: 'old', AGENTBUS_PUSH_BRIDGE_PID: '123' }), { PATH: 'path' });
   assert.deepEqual(launchEnvironment({ CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_SESSION_ID: 'old', CLAUDE_CODE_ENTRYPOINT: 'cli' }), { CLAUDE_CODE_USE_BEDROCK: '1' });
+});
+test('a claimed claude-code launch disables the background-shell pressure reaper unless the launch env already decides', () => {
+  const base = { PATH: 'path', AGENTBUS_DIR: '/bus' };
+  assert.deepEqual(COMPUTE_CLAIM_ENV, { CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP: '1' });
+  assert.deepEqual(claimEnvironment({ runtime: 'claude-code', claims: ['gpu'] }, base), { ...base, CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP: '1' });
+  assert.deepEqual(claimEnvironment({ runtime: 'claude-code', claims: ['cpu'] }, base), { ...base, CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP: '1' });
+  // an explicit value in the launch environment wins, even an opt back in
+  assert.deepEqual(claimEnvironment({ runtime: 'claude-code', claims: ['gpu'] }, { ...base, CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP: '0' }), { ...base, CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP: '0' });
+  assert.deepEqual(claimEnvironment({ runtime: 'claude-code', claims: ['gpu'] }, { ...base, CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP: '' }), { ...base, CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP: '' });
+  // unclaimed launches and other runtimes are untouched: the reaper is a shared-use guard and stays
+  assert.deepEqual(claimEnvironment({ runtime: 'claude-code' }, base), base);
+  assert.deepEqual(claimEnvironment({ runtime: 'claude-code', claims: [] }, base), base);
+  assert.deepEqual(claimEnvironment({ runtime: 'codex', claims: ['gpu'] }, base), base);
+  assert.equal(claimEnvironment({ runtime: 'claude-code' }, base), base);
 });
 test('remote receipt access and stopping are restricted to the original sender; stop prevents restart', async (t) => {
   const f = fixture(t), source = 'host/agent';
