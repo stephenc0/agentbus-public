@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream';
 import readline from 'node:readline';
 import { attachProxy } from '../lib/codex-proxy.mjs';
 import { buildInfo } from '../lib/build-info.mjs';
-import { readLaunch, writeLaunch, isCorrupt, claudeLaunchArgs, claudeJobId, desktopLaunch, launchEnvironment, launchPolicy } from '../lib/session-launch.mjs';
+import { readLaunch, writeLaunch, isCorrupt, claudeLaunchArgs, claudeJobId, desktopLaunch, launchEnvironment, claimEnvironment, launchPolicy } from '../lib/session-launch.mjs';
 
 import { codexThreadParams, verifyNativePermissions } from '../lib/launch-permissions.mjs';
 import { claudeJobs, matchClaudeJob, claudeJobExited, stopClaudeJob, terminateChild, claudeJobLogs, classifyClaudeLog } from '../lib/native-runtime.mjs';
@@ -89,7 +89,7 @@ try {
       update(code === 0 ? { state: 'awaiting_user', note: 'opened the code composer with the task prefilled. confirm the folder and send it in desktop. no session id is exposed by this handoff; use list_agents after starting.' } : { state: 'failed', error: error || `desktop handoff exited ${code}` });
     });
   } else if (request.runtime === 'claude-code') {
-    child = spawn(record.binary, claudeLaunchArgs(request), { cwd: request.cwd, env, detached: process.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn(record.binary, claudeLaunchArgs(request), { cwd: request.cwd, env: claimEnvironment(request, env), detached: process.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     const collect = (b) => { output = (output + b.toString()).slice(-8192); const nativeJobId = claudeJobId(output); if (nativeJobId && !record.nativeJobId) update({ nativeJobId }); };
     child.stdout.on('data', collect); child.stderr.on('data', collect);
