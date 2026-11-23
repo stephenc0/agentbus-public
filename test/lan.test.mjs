@@ -8,6 +8,7 @@ import { Bonjour } from 'bonjour-service';
 import { execFileSync } from 'node:child_process';
 import { initLan, loadLan, remoteId, parseRemoteId, privateIPv4, localLanRequest, peerRequest, ownerOnly, resolveMdnsInterface } from '../lib/lan.mjs';
 import { startLan, discoveryPeer } from '../lib/lan-daemon.mjs';
+import { ownedService, advertisedHost, advertisedAddresses } from '../lib/mdns-advertise.mjs';
 import { presenceTracker } from '../lib/presence.mjs';
 import { registerStorage } from '../lib/storage.mjs';
 
@@ -54,6 +55,40 @@ test('mdns interface resolves adapter names past virtual switches and link-local
   assert.equal(resolveMdnsInterface('8.8.8.8', ifs), undefined);
   assert.equal(resolveMdnsInterface('Missing', ifs), undefined);
   assert.equal(resolveMdnsInterface(undefined, ifs), undefined);
+});
+
+// 2026-11-22: bonjour-service's default host is os.hostname(), and it answers A queries for that name with every
+// interface's ipv4. mDNSResponder took one of those as a conflict with its own name and renamed mac-mini to mac-mini-2.
+test('advertisements never carry the machine hostname, and only dialable addresses', () => {
+  const hostId = crypto.randomUUID(), machine = os.hostname(), own = [machine, `${machine}.local`, `${machine.replace(/\.local$/, '')}.local`];
+  const shapes = [
+    { name: `agentbus-${hostId}`, type: 'agentbus', txt: { v: '1', id: hostId } },
+    { name: crypto.createHash('sha256').update(`${hostId}/codex:x`).digest('hex').slice(0, 48), type: 'agentbus-agent', txt: { v: '1', host: hostId } },
+    { name: crypto.createHash('sha256').update(`${hostId}/storage/x`).digest('hex').slice(0, 48), type: 'agentbus-store', txt: { v: '1', host: hostId } },
+  ];
+  for (const shape of shapes) {
+    const records = ownedService({ ...shape, protocol: 'tcp', port: 47800, host: advertisedHost(hostId), addresses: ['192.168.1.198'] }).records();
+    for (const r of records) {
+      assert(!own.includes(r.name) && !own.includes(r.name.replace(/\.$/, '')), `${r.type} record named after the machine: ${r.name}`);
+      if (r.type === 'SRV') assert(!own.includes(String(r.data.target).replace(/\.$/, '')), `SRV targets the machine: ${r.data.target}`);
+    }
+    assert.equal(records.find((r) => r.type === 'SRV').data.target, `agentbus-${hostId}.local`);
+    assert.deepEqual(records.filter((r) => r.type === 'A').map((r) => [r.name, r.data]), [[`agentbus-${hostId}.local`, '192.168.1.198']]);
+    assert.equal(records.filter((r) => r.type === 'AAAA').length, 0);
+    assert.equal(records.find((r) => r.type === 'TXT').name, `${shape.name}._${shape.type}._tcp.local`);
+  }
+  assert.throws(() => ownedService({ name: 'x', type: 'agentbus', port: 1 }), /explicit host/);
+  // not advertised: loopback, link-local (169.254), tailscale (100.64/10), public, ipv6. a pinned interface wins outright.
+  const ifs = {
+    lo0: [{ family: 'IPv4', address: '127.0.0.1', internal: true }],
+    en0: [{ family: 'IPv6', address: 'fe80::1', internal: false }, { family: 'IPv4', address: '192.168.1.198', internal: false }, { family: 'IPv4', address: '169.254.9.9', internal: false }],
+    en5: [{ family: 'IPv4', address: '172.20.10.2', internal: false }],
+    utun4: [{ family: 'IPv4', address: '100.82.21.105', internal: false }],
+    ppp0: [{ family: 'IPv4', address: '8.8.4.4', internal: false }],
+  };
+  assert.deepEqual(advertisedAddresses(undefined, ifs), ['192.168.1.198', '172.20.10.2']);
+  assert.deepEqual(advertisedAddresses('192.168.1.198', ifs), ['192.168.1.198']);
+  assert.deepEqual(advertisedAddresses(undefined, {}), []);
 });
 
 test('discovery rejects wrong protocol, own host, public addresses and malformed identities', () => {
@@ -220,6 +255,16 @@ test('real multicast discovery authenticates two isolated test daemons', { skip:
   assert.equal(stores[0]?.txt.state, 'available');
   assert.equal(stores[0]?.txt.localPath, undefined);
   assert.equal(stores[0]?.txt.uri, undefined);
+  // on the wire the daemon is a responder only for its own host name; the machine's stays mDNSResponder's alone.
+  const machine = os.hostname().replace(/\.local$/, ''), bad = (name) => [machine, `${machine}.local`].includes(String(name).replace(/\.$/, ''));
+  for (const daemon of [p.A, p.B]) {
+    const records = daemon.advertised();
+    assert(records.some((r) => r.type === 'A'), 'the daemon advertises at least one address');
+    for (const r of records) { assert(!bad(r.name), `${r.type} ${r.name}`); if (r.type === 'SRV') assert(!bad(r.data.target), `SRV ${r.data.target}`); }
+    for (const a of records.filter((r) => r.type === 'A').map((r) => r.data)) assert(privateIPv4(a) && !a.startsWith('169.254.') && !/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(a), `advertised ${a}`);
+  }
+  assert.equal(seen[0]?.host, advertisedHost(p.cb.hostId));
+  assert.equal(stores[0]?.host, advertisedHost(p.cb.hostId));
 });
 
 test('sms uses the pinned primary, qualifies ownership and fails closed on primary loss', async (t) => {
