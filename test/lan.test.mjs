@@ -8,7 +8,8 @@ import { Bonjour } from 'bonjour-service';
 import { execFileSync } from 'node:child_process';
 import { initLan, loadLan, remoteId, parseRemoteId, privateIPv4, localLanRequest, peerRequest, ownerOnly, resolveMdnsInterface } from '../lib/lan.mjs';
 import { startLan, discoveryPeer } from '../lib/lan-daemon.mjs';
-import { ownedService, advertisedHost, advertisedAddresses } from '../lib/mdns-advertise.mjs';
+import { ownedService, advertisedHost, advertisedAddresses, publishOwned } from '../lib/mdns-advertise.mjs';
+import { Registry } from 'bonjour-service/dist/lib/registry.js';
 import { presenceTracker } from '../lib/presence.mjs';
 import { registerStorage } from '../lib/storage.mjs';
 
@@ -89,6 +90,34 @@ test('advertisements never carry the machine hostname, and only dialable address
   assert.deepEqual(advertisedAddresses(undefined, ifs), ['192.168.1.198', '172.20.10.2']);
   assert.deepEqual(advertisedAddresses('192.168.1.198', ifs), ['192.168.1.198']);
   assert.deepEqual(advertisedAddresses(undefined, {}), []);
+});
+
+// publishOwned mirrors bonjour-service's Registry.publish and so leans on its internals (Bonjour#registry,
+// Registry#services/server/announce/teardown, Service#activated and the Record* builders). package.json allows minor
+// bumps; this drives the real Registry with a fake server so a renamed member fails here, never silently on a host.
+test('owned publication announces and withdraws through the real bonjour-service registry', async () => {
+  const sent = [], registered = [], unregistered = [];
+  const server = { register: (r) => registered.push(...[].concat(r)), unregister: (r) => unregistered.push(...[].concat(r)), mdns: { respond: (packet, cb) => { sent.push(packet); cb?.(); } } };
+  const registry = new Registry(server);
+  assert.equal(typeof Bonjour.prototype.publish, 'function');
+  assert.match(Object.getPrototypeOf(Bonjour).toString(), /this\.registry\s*=\s*new/, 'Bonjour no longer keeps its Registry at #registry');
+  const hostId = crypto.randomUUID(), host = advertisedHost(hostId);
+  const service = publishOwned({ registry }, { name: `agentbus-${hostId}`, type: 'agentbus', protocol: 'tcp', port: 47800, txt: { v: '1', id: hostId }, host, addresses: ['192.168.1.198', '10.0.0.2'] });
+  assert.equal(service.activated, true); assert.equal(service.published, true);
+  assert.deepEqual(registry.services, [service]);
+  const announced = sent[0];
+  assert.equal(announced.find((r) => r.type === 'SRV').data.target, host);
+  assert.deepEqual(announced.filter((r) => r.type === 'A').map((r) => r.data), ['192.168.1.198', '10.0.0.2']);
+  assert(announced.every((r) => r.type !== 'A' || r.name === host));
+  assert.equal(registered.length, announced.length);
+  service.destroyed = true;
+  await new Promise((r) => service.stop(r));
+  assert.equal(registry.services.length, 0); assert.equal(service.published, false);
+  assert(sent[1].every((r) => r.ttl === 0), 'withdrawal answers with ttl 0');
+  assert.equal(unregistered.filter((r) => r.type === 'A').length, 2);
+  // a second stop is a no-op, as the library's own publish behaves
+  await new Promise((r) => service.stop(r));
+  assert.equal(sent.length, 2);
 });
 
 test('discovery rejects wrong protocol, own host, public addresses and malformed identities', () => {
